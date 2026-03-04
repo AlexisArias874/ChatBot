@@ -3,38 +3,42 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const app = express();
 app.use(express.json());
 
-// 1. CONFIGURACIÓN: Pega aquí tu API Key de Gemini
+// CONFIGURACIÓN: Pega aquí tu API Key de Gemini
 const genAI = new GoogleGenerativeAI("AIzaSyDsyO8g_sDtHqpaBywoXdeRQTugmpGmgGE");
 
 app.post('/webhook', async (req, res) => {
-    // Extraer el mensaje del usuario desde Dialogflow
+    // Verificamos si Dialogflow envió el texto correctamente
+    if (!req.body.queryResult || !req.body.queryResult.queryText) {
+        return res.json({ fulfillmentText: "Error: No recibí texto de Dialogflow." });
+    }
+
     const userQuery = req.body.queryResult.queryText;
     console.log("Usuario dijo:", userQuery);
 
     try {
-        // 2. Configurar el modelo (gemini-1.5-flash es el más rápido y gratis)
+        // Usamos gemini-1.5-flash que es el más estable y gratuito
         const model = genAI.getGenerativeModel({ 
-            model: "gemini-1.5-flash",
-            systemInstruction: "Eres un experto vendedor de la tienda 'Venta de Equipaje'. Responde de forma amable, profesional y breve. Ayuda al cliente a elegir la mejor maleta.",
+            model: "gemini-1.5-flash" 
         });
 
-        // 3. Generar la respuesta
-        const result = await model.generateContent(userQuery);
-        const responseAI = await result.response;
-        const botReply = responseAI.text();
+        // Prompt de instrucciones para la IA
+        const prompt = `Eres un vendedor de maletas de la tienda 'Venta de Equipaje'. 
+        Responde a lo siguiente de forma breve y amable: ${userQuery}`;
 
-        // 4. Enviar la respuesta de vuelta a Dialogflow -> Facebook
+        const result = await model.generateContent(prompt);
+        const responseText = result.response.text();
+
         return res.json({
-            fulfillmentText: botReply
+            fulfillmentText: responseText
         });
 
     } catch (error) {
-        console.error("Error con Gemini:", error);
+        console.error("Error detallado de Gemini:", error);
         return res.json({
-            fulfillmentText: "Lo siento, tuve un problema al procesar tu solicitud con Gemini."
+            fulfillmentText: "La IA de Google tuvo un problema. Intenta de nuevo en un momento."
         });
     }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor con Gemini en puerto ${PORT}`));
+const PORT = process.env.PORT || 10000; // Render usa el puerto 10000 por defecto
+app.listen(PORT, () => console.log(`Servidor escuchando en puerto ${PORT}`));
