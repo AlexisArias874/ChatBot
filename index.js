@@ -3,42 +3,51 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const app = express();
 app.use(express.json());
 
-// CONFIGURACIÓN: Pega aquí tu API Key de Gemini
+// CONFIGURACIÓN: Tu API Key
 const genAI = new GoogleGenerativeAI("AIzaSyDsyO8g_sDtHqpaBywoXdeRQTugmpGmgGE");
 
-app.post('/webhook', async (req, res) => {
-    // Verificamos si Dialogflow envió el texto correctamente
-    if (!req.body.queryResult || !req.body.queryResult.queryText) {
-        return res.json({ fulfillmentText: "Error: No recibí texto de Dialogflow." });
+// FUNCIÓN PARA LISTAR MODELOS (Aparecerá en los logs de Render)
+async function listModels() {
+    try {
+        console.log("--- LISTA DE MODELOS DISPONIBLES ---");
+        // Nota: En algunas versiones de la SDK, listModels() puede variar.
+        // Intentaremos listar los modelos para ver cuáles tienes activos.
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${genAI.apiKey}`);
+        const data = await response.json();
+        
+        if (data.models) {
+            data.models.forEach(m => console.log("- " + m.name));
+        } else {
+            console.log("No se pudieron listar los modelos:", data);
+        }
+        console.log("------------------------------------");
+    } catch (err) {
+        console.error("Error al listar modelos:", err);
     }
+}
 
+// Ejecutar la lista al iniciar
+listModels();
+
+app.post('/webhook', async (req, res) => {
     const userQuery = req.body.queryResult.queryText;
     console.log("Usuario dijo:", userQuery);
 
     try {
-        // Usamos gemini-1.5-flash que es el más estable y gratuito
-        const model = genAI.getGenerativeModel({ 
-            model: "gemini-1.5-flash" 
-        });
+        // PRUEBA ESTO: Cambiamos a 'gemini-pro' que es el más compatible universalmente
+        const model = genAI.getGenerativeModel({ model: "gemini-pro" });
 
-        // Prompt de instrucciones para la IA
-        const prompt = `Eres un vendedor de maletas de la tienda 'Venta de Equipaje'. 
-        Responde a lo siguiente de forma breve y amable: ${userQuery}`;
+        const result = await model.generateContent(userQuery);
+        const responseAI = await result.response;
+        const botReply = responseAI.text();
 
-        const result = await model.generateContent(prompt);
-        const responseText = result.response.text();
-
-        return res.json({
-            fulfillmentText: responseText
-        });
+        return res.json({ fulfillmentText: botReply });
 
     } catch (error) {
         console.error("Error detallado de Gemini:", error);
-        return res.json({
-            fulfillmentText: "La IA de Google tuvo un problema. Intenta de nuevo en un momento."
-        });
+        return res.json({ fulfillmentText: "Error de conexión con la IA." });
     }
 });
 
-const PORT = process.env.PORT || 10000; // Render usa el puerto 10000 por defecto
-app.listen(PORT, () => console.log(`Servidor escuchando en puerto ${PORT}`));
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`Servidor iniciado en puerto ${PORT}`));
