@@ -4,7 +4,7 @@ const app = express();
 app.use(express.json());
 
 // CONFIGURACIÓN: Tu API Key
-const genAI = new GoogleGenerativeAI("AIzaSyDsyO8g_sDtHqpaBywoXdeRQTugmpGmgGE");
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // FUNCIÓN PARA LISTAR MODELOS (Aparecerá en los logs de Render)
 async function listModels() {
@@ -51,3 +51,4 @@ app.post('/webhook', async (req, res) => {
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Servidor iniciado en puerto ${PORT}`));
+
