@@ -14,7 +14,7 @@ app.post('/webhook', async (req, res) => {
     try {
         // Usamos la versión 2.0 que apareció en tu lista de modelos disponibles
         const model = genAI.getGenerativeModel({ 
-            model: "gemini-2.0-flash" 
+            model: "gemini-2.5-flash-preview-tts" 
         });
 
         const chat = model.startChat({
@@ -41,3 +41,4 @@ app.post('/webhook', async (req, res) => {
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Servidor listo en puerto ${PORT}`));
+
