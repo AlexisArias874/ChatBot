@@ -6,20 +6,20 @@ app.use(express.json());
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const chatSessions = new Map();
 
-// --- FUNCIÓN DE RESPALDO PARA CUOTAS (PLAN A, B y C) ---
-async function generarRespuestaConRespaldo(userQuery, sessionID) {
-    // Lista de modelos ordenados por estabilidad en la versión gratuita
-    const modelosSoportados = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"];
+// --- FUNCIÓN DE RESPUESTA CON MODELOS 2.0 ---
+async function generarRespuesta2_0(userQuery, sessionID) {
+    // Usaremos los modelos 2.0 de tu lista exacta
+    const modelos2_0 = ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-2.0-flash-001"];
     
-    for (let nombreModelo of modelosSoportados) {
+    for (let nombreModelo of modelos2_0) {
         try {
-            console.log(`Intentando con el modelo estable: ${nombreModelo}`);
+            console.log(`Intentando con modelo 2.0: ${nombreModelo}`);
             const model = genAI.getGenerativeModel({ 
                 model: nombreModelo,
-                systemInstruction: "Eres el vendedor estrella de 'Venta de Equipaje'. Ayuda al cliente a elegir mochila, maleta o bolso."
+                // Instrucción de sistema para mantener el contexto de la tienda
+                systemInstruction: "Eres el mejor vendedor de 'Venta de Equipaje'. Vendes mochilas, maletas y bolsos. Eres amable y cierras ventas."
             });
 
-            // Si no hay sesión, la creamos para este modelo
             if (!chatSessions.has(sessionID)) {
                 chatSessions.set(sessionID, model.startChat({ history: [] }));
             }
@@ -29,14 +29,17 @@ async function generarRespuestaConRespaldo(userQuery, sessionID) {
             return result.response.text();
 
         } catch (error) {
-            console.error(`Error con ${nombreModelo}:`, error.message);
-            // Si es error de cuota (429), borramos la sesión fallida e intentamos el siguiente modelo
-            chatSessions.delete(sessionID);
-            if (error.message.includes("429") || error.message.includes("404")) continue;
+            console.error(`Fallo en ${nombreModelo}:`, error.message);
+            
+            // Si el error es 429 (Límite 0) o 503 (Saturación), probamos el siguiente 2.0
+            if (error.message.includes("429") || error.message.includes("503") || error.message.includes("404")) {
+                chatSessions.delete(sessionID);
+                continue; 
+            }
             throw error;
         }
     }
-    throw new Error("Ningún modelo de Google está disponible ahora.");
+    throw new Error("Ningún modelo 2.0 respondió.");
 }
 
 app.post('/webhook', async (req, res) => {
@@ -45,24 +48,25 @@ app.post('/webhook', async (req, res) => {
     const intentName = req.body.queryResult.intent ? req.body.queryResult.intent.displayName : "Default";
 
     try {
-        if (intentName === "NuevoPedido" || userQuery.toLowerCase() === "reiniciar") {
+        // Reinicio manual
+        if (userQuery.toLowerCase() === "reiniciar" || intentName === "NuevoPedido") {
             chatSessions.delete(sessionID);
         }
 
-        const botReply = await generarRespuestaConRespaldo(userQuery, sessionID);
+        const botReply = await generarRespuesta2_0(userQuery, sessionID);
         return res.json({ fulfillmentText: botReply });
 
-    } catch (finalError) {
-        // RESPUESTA DE EMERGENCIA SI GOOGLE SE CAE POR COMPLETO
-        const respuestasFallback = {
-            "ElegirProducto": "¡Uy! Mis sistemas están saturados. Pero cuéntame, ¿buscabas maleta, mochila o bolso? 🧳",
-            "ElegirTamaño": "Se me perdió la cinta métrica por un segundo. 😂 ¿Qué tamaño prefieres: pequeña, mediana o grande?",
-            "ElegirColor": "¡Qué colores tan bonitos! ¿Cuál de los tres prefieres: negra, blanca o gris? 🎨"
+    } catch (err) {
+        // Si todo lo anterior falla, damos la respuesta humanizada de "respaldo"
+        const fallbacks = {
+            "ElegirProducto": "¡Uy! Mis sistemas de maletas están algo lentos. 🧳 Pero cuéntame, ¿buscabas mochila, maleta o bolso?",
+            "ElegirTamaño": "Se me perdió la cinta métrica un segundo. 😂 ¿Qué tamaño prefieres: pequeña, mediana o grande?",
+            "ElegirColor": "¡Qué colores tan padres! ¿Lo quieres en negro, blanco o gris? 🎨"
         };
-        const msg = respuestasFallback[intentName] || "Lo siento, hay mucha gente en la tienda ahora mismo. ¿Podrías repetirme tu pregunta? 😅";
+        const msg = fallbacks[intentName] || "Lo siento, hay mucha gente en la tienda. ¿Me repites tu duda? 😅";
         return res.json({ fulfillmentText: msg });
     }
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 Vendedor listo con modelos serie 1.5`));
+app.listen(PORT, () => console.log(`🚀 Servidor forzado a modelos 2.0 activo`));
