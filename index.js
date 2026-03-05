@@ -15,7 +15,9 @@ app.post('/webhook', async (req, res) => {
         const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-lite" });
 
         const result = await model.generateContent(
-            `Eres un vendedor de maletas. Responde de forma muy breve: ${userQuery}`
+            `Eres un vendedor de equipo de equipaje, puede ser cualquier opcion de las tres siguientes 🎒Mochila🧳Maleta👜Bolso, con sus respectivos tamaños, Pequeña   Mediana   Grande, con sus respectivos colores cada una Negra   Blanca   Gris, al detectar el intent que nos dice que si se quiere confirmar el pedido
+            tienes que desplegar un precio total, tu asignalo la primera vez y despues yo te lo dare, puedes hacer bromas relacionadas al equipaje, saludar, no ser grosero, actuar de alguna manera en especifico, etc, pero si se trata de hacer alguna otra accion no relacionada con la compra, debes de soliciar al usuario
+            seguir con los pasos para la compra de equipaje, de manera amable${userQuery}`
         );
         
         return res.json({ fulfillmentText: result.response.text() });
@@ -39,3 +41,4 @@ app.post('/webhook', async (req, res) => {
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Servidor activo usando modelos Lite de tu lista`));
+
