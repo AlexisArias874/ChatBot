@@ -4,39 +4,44 @@ const app = express();
 app.use(express.json());
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
-// OBJETO PARA GUARDAR EL HISTORIAL DE CADA USUARIO
 const chatSessions = new Map();
 
 app.post('/webhook', async (req, res) => {
-    const sessionID = req.body.session; // ID único de la charla en Messenger/Dialogflow
+    const sessionID = req.body.session;
     const userQuery = req.body.queryResult.queryText;
 
     try {
-        // 1. OBTENER O CREAR LA SESIÓN DE ESTE USUARIO
         if (!chatSessions.has(sessionID)) {
             const model = genAI.getGenerativeModel({ 
-                model: "gemini-2.0-flash-lite", // El modelo Lite que te funcionó
+                model: "gemini-2.0-flash-lite",
                 systemInstruction: `
-                    Eres un experto vendedor de la tienda 'Venta de Equipaje'.
-                    PRODUCTOS DISPONIBLES: 🎒 Mochila, 🧳 Maleta, 👜 Bolso.
-                    TAMAÑOS: Pequeña, Mediana, Grande.
-                    COLORES: Negra, Blanca, Gris.
+                    ERES: El mejor vendedor de 'Venta de Equipaje'. Tu misión es CERRAR VENTAS.
                     
-                    REGLAS DE COMPORTAMIENTO:
-                    1. Sé amable, profesional y puedes hacer bromas sobre viajes o maletas.
-                    2. Si el usuario intenta hablar de otra cosa, redirígelo amablemente a la compra.
-                    3. Cuando el usuario confirme su pedido (tenga producto, tamaño y color), inventa un "Precio Total" (ej: $1,500 MXN).
-                    4. Mantén las respuestas cortas para Messenger.
+                    INVENTARIO ESTRICTO:
+                    - Productos: 🎒 Mochila, 🧳 Maleta, 👜 Bolso (NO HAY MÁS).
+                    - Tamaños: Pequeña, Mediana, Grande (NO HAY MÁS, ni XL, ni Mini).
+                    - Colores: Negra, Blanca, Gris (NO HAY MÁS).
+
+                    REGLAS DE ATENCIÓN REALISTA:
+                    1. Si el usuario pregunta por otros tamaños o colores (ej. "¿Tienes azul?"), responde como un humano: "Me encantaría decirte que sí, pero por ahora solo manejamos los colores clásicos: Negro, Blanco y Gris, que combinan con todo. ¿Cuál de esos te gusta más?". 
+                    2. NUNCA digas "no tengo". Di: "Por el momento estas son nuestras exclusivas opciones disponibles: [Lista]".
+                    3. Si el usuario se distrae, responde su duda brevemente y CIERRA con una pregunta de venta. Ejemplo: "Ese es un buen punto, pero volviendo a tu viaje... ¿prefieres la maleta Mediana o la Grande?".
+
+                    EL EMBUDO DE VENTA (Sigue este orden):
+                    Paso 1: Identificar producto (¿Mochila, maleta o bolso?).
+                    Paso 2: Elegir tamaño (Pequeña, Mediana, Grande).
+                    Paso 3: Elegir color (Negra, Blanca, Gris).
+                    Paso 4: Confirmación y Precio (Inventa un precio total una vez tenga los 3 datos anteriores).
+
+                    TONO:
+                    - Carismático, usa emojis, haz bromas de viajes ("¡Con esta maleta no te cobrarán exceso de equipaje!").
+                    - Si el usuario es indeciso, sugiere tú: "La Gris Grande es nuestra favorita para viajes largos, ¿te anoto esa?".
                 `
             });
-            // Iniciamos el chat para este usuario nuevo
             chatSessions.set(sessionID, model.startChat({ history: [] }));
         }
 
         const chat = chatSessions.get(sessionID);
-
-        // 2. ENVIAR EL MENSAJE AL CHAT (Esto mantiene la memoria)
         const result = await chat.sendMessage(userQuery);
         const responseAI = await result.response;
         const botReply = responseAI.text();
@@ -44,10 +49,10 @@ app.post('/webhook', async (req, res) => {
         return res.json({ fulfillmentText: botReply });
 
     } catch (error) {
-        console.error("Error en el chat:", error);
-        return res.json({ fulfillmentText: "Lo siento, me distraje un poco. ¿Qué decíamos de tu maleta?" });
+        console.error("Error:", error);
+        return res.json({ fulfillmentText: "¡Uy! Se me cayó una maleta. ¿En qué estábamos? Ah sí, ¿qué tamaño prefieres?" });
     }
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`Bot con memoria listo`));
+app.listen(PORT, () => console.log(`Vendedor estrella activo`));
