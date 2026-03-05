@@ -1,32 +1,19 @@
 app.post('/webhook', async (req, res) => {
     const sessionID = req.body.session;
     const userQuery = req.body.queryResult.queryText;
-    const intentName = req.body.queryResult.intent.displayName; // <--- LEEMOS EL NOMBRE DEL INTENT
+    
+    // 1. EXTRAEMOS EL NOMBRE DEL INTENT PARA EL MANEJO DINÁMICO
+    const intentName = req.body.queryResult.intent ? req.body.queryResult.intent.displayName : "Desconocido";
 
     try {
-        // SI EL INTENT ES "NuevoPedido", BORRAMOS LA MEMORIA DE ESTE USUARIO
-        if (intentName === "9 PasoNuevoPedido") {
-            chatSessions.delete(sessionID); 
-            console.log(`Sesión ${sessionID} reiniciada para nuevo pedido.`);
-            // No retornamos aquí, dejamos que el código de abajo cree una sesión limpia
+        if (intentName === "NuevoPedido") {
+            chatSessions.delete(sessionID);
         }
 
         if (!chatSessions.has(sessionID)) {
             const model = genAI.getGenerativeModel({ 
                 model: "gemini-2.0-flash-lite",
-                systemInstruction: `
-                    Eres el vendedor estrella de 'Venta de Equipaje'.
-                    TU OBJETIVO: Cerrar ventas de 🎒Mochilas, 🧳Maletas y 👜Bolsos.
-                    
-                    FLUJO DE VENTA:
-                    1. Ayuda al cliente a elegir Producto, Tamaño y Color.
-                    2. Al tener los 3 datos, da el PRECIO TOTAL e inventa un número de pedido.
-                    3. LUEGO DE DAR EL PRECIO, pregunta siempre: "¿Te gustaría agregar otra pieza a tu pedido o prefieres que procedamos con el pago de esta?".
-                    
-                    REGLAS DE MEMORIA:
-                    - Si el usuario dice "Quiero otra", felicítalo por su elección y pregúntale cuál de nuestros otros productos (mochila, maleta o bolso) quiere ahora.
-                    - Si el usuario se confunde, recuérdale las opciones disponibles.
-                `
+                systemInstruction: `Eres un experto vendedor de 'Venta de Equipaje' (mochilas, maletas y bolsos). Tu meta es cerrar ventas ayudando al usuario a elegir producto, tamaño y color.`
             });
             chatSessions.set(sessionID, model.startChat({ history: [] }));
         }
@@ -39,7 +26,21 @@ app.post('/webhook', async (req, res) => {
         return res.json({ fulfillmentText: botReply });
 
     } catch (error) {
-        console.error("Error:", error);
-        return res.json({ fulfillmentText: "Hubo un pequeño error, pero cuéntame, ¿qué otra maleta estás buscando?" });
+        console.error("Error detectado en Intent:", intentName, error);
+
+        // 2. MAPA DE MENSAJES DE ERROR DINÁMICOS
+        const mensajesDeError = {
+            "Default Welcome Intent": "¡Hola! Perdona, se me trabó la cremallera del saludo. 🎒 ¿Estás buscando mochila, maleta o bolso hoy?",
+            "ElegirProducto": "¡Vaya! Me distraje viendo los catálogos. ¿Me repetías si querías maleta, mochila o bolso? 🧳",
+            "ElegirTamaño": "¡Ups! Se me perdió la cinta métrica por un segundo. 📏 ¿Qué tamaño te gustaría: pequeña, mediana o grande?",
+            "ElegirColor": "¡Qué colores tan bonitos! Pero me confundí un poco, ¿cuál de los tres elegiste: negra, blanca o gris? 🎨",
+            "ConfirmarPedido": "¡Casi terminamos! Hubo un pequeño error al procesar el total, ¿podrías confirmarme si estás listo para el pedido? 🛒",
+            "NuevoPedido": "¡Claro! Empecemos de nuevo. ¿Qué pieza de equipaje quieres agregar ahora? 🎒🧳👜"
+        };
+
+        // 3. SELECCIONAR EL MENSAJE SEGÚN EL INTENT O UNO POR DEFECTO
+        const respuestaFinal = mensajesDeError[intentName] || "¡Uy! Se me cayó una maleta y me confundí. ¿Podrías repetirme lo último? 😅";
+
+        return res.json({ fulfillmentText: respuestaFinal });
     }
 });
