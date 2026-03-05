@@ -5,42 +5,40 @@ app.use(express.json());
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// Función para esperar (evitar el error 429)
-const delay = ms => new Promise(res => setTimeout(res, ms));
-
-async function getAIResponse(query) {
-    // Los modelos 2.5 y 3.1 te dan "Limit 0". Usa el 1.5 que es el estable.
-    const modelName = "gemini-1.5-flash"; 
-    
-    try {
-        const model = genAI.getGenerativeModel({ model: modelName });
-        const result = await model.generateContent(query);
-        return result.response.text();
-    } catch (error) {
-        if (error.message.includes("429")) {
-            console.log("Cuota excedida, esperando 2 segundos...");
-            await delay(2000);
-            // Reintento único con el alias estable
-            const modelRetry = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
-            const resultRetry = await modelRetry.generateContent(query);
-            return resultRetry.response.text();
-        }
-        throw error;
-    }
-}
-
 app.post('/webhook', async (req, res) => {
     if (!req.body.queryResult) return res.json({ fulfillmentText: "Error de datos." });
     const userQuery = req.body.queryResult.queryText;
 
     try {
-        const botReply = await getAIResponse(userQuery);
-        return res.json({ fulfillmentText: botReply });
-    } catch (err) {
-        console.error("Error final:", err.message);
-        return res.json({ fulfillmentText: "Lo siento, estoy recibiendo muchas consultas. Intenta de nuevo en un momento." });
+        // USAMOS ESTE NOMBRE EXACTO DE TU LISTA
+        // Es el modelo profesional, más estable frente a saturaciones (503)
+        const model = genAI.getGenerativeModel({ model: "gemini-pro-latest" });
+
+        const result = await model.generateContent(
+            `Actúa como vendedor de maletas. Responde brevemente: ${userQuery}`
+        );
+        
+        const responseText = result.response.text();
+
+        return res.json({
+            fulfillmentText: responseText
+        });
+
+    } catch (error) {
+        console.error("Error detallado:", error.message);
+        
+        // Si el Pro también falla, intentamos el Flash como última opción
+        try {
+            const fallbackModel = genAI.getGenerativeModel({ model: "gemini-flash-latest" });
+            const resultFB = await fallbackModel.generateContent(userQuery);
+            return res.json({ fulfillmentText: resultFB.response.text() });
+        } catch (err2) {
+            return res.json({ 
+                fulfillmentText: "Mis sistemas están muy ocupados. ¿Podrías intentar preguntarme de nuevo?" 
+            });
+        }
     }
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`Bot conectado con Gemini 1.5 Flash` ));
+app.listen(PORT, () => console.log(`Servidor usando Gemini Pro Latest`));
