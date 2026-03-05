@@ -10,32 +10,32 @@ app.post('/webhook', async (req, res) => {
     const userQuery = req.body.queryResult.queryText;
 
     try {
-        // Probamos con el modelo más liviano y con mayor probabilidad de cuota libre
-        // Si este falla, el "catch" intentará con el Pro estándar.
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+        // USANDO EL MODELO EXACTO DE TU LISTA: gemini-2.0-flash-lite
+        // Este es el que tiene más probabilidad de tener cuota gratuita libre
+        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-lite" });
 
         const result = await model.generateContent(
-            `Instrucción: Eres un vendedor de la tienda 'Venta de Equipaje'. Responde de forma muy breve: ${userQuery}`
+            `Eres un vendedor de maletas. Responde de forma muy breve: ${userQuery}`
         );
         
         return res.json({ fulfillmentText: result.response.text() });
 
     } catch (error) {
-        console.error("Error con Flash, intentando con 1.5-pro-latest...");
+        console.error("Error con 2.0-flash-lite, intentando gemini-flash-lite-latest...");
         
         try {
-            // Plan B: El modelo Pro estándar (A veces tiene cuota cuando el Flash falla)
-            const backupModel = genAI.getGenerativeModel({ model: "gemini-1.5-pro-latest" });
+            // PLAN B: Otro modelo Lite de tu lista que debería ser gratuito
+            const backupModel = genAI.getGenerativeModel({ model: "gemini-flash-lite-latest" });
             const resultBackup = await backupModel.generateContent(userQuery);
             return res.json({ fulfillmentText: resultBackup.response.text() });
         } catch (err2) {
             console.error("Ambos fallaron:", err2.message);
             return res.json({ 
-                fulfillmentText: "Mis sistemas están saturados por ahora. Por favor, intenta de nuevo en unos segundos." 
+                fulfillmentText: "Mis sistemas están saturados. Por favor, intenta de nuevo en unos segundos." 
             });
         }
     }
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`Servidor activo con Gemini 1.5 Flash Latest`));
+app.listen(PORT, () => console.log(`Servidor activo usando modelos Lite de tu lista`));
