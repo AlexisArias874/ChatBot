@@ -5,6 +5,28 @@ app.use(express.json());
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
+// Función para llamar a la IA con reintentos
+async function getAIResponse(query) {
+    // Intentaremos con estos 3 modelos en orden de prioridad
+    const modelsToTry = ["gemini-2.5-pro", "gemini-2.0-flash-lite", "gemini-3-pro-preview"];
+    
+    for (let modelName of modelsToTry) {
+        try {
+            console.log(`Intentando con el modelo: ${modelName}...`);
+            const model = genAI.getGenerativeModel({ model: modelName });
+            const prompt = `Actúa como vendedor experto de 'Venta de Equipaje'. Responde brevemente: ${query}`;
+            
+            const result = await model.generateContent(prompt);
+            return result.response.text();
+        } catch (error) {
+            console.error(`Error con ${modelName}:`, error.message);
+            // Si el error es 503 o 429, el bucle pasará al siguiente modelo
+            continue; 
+        }
+    }
+    throw new Error("Todos los modelos de Google están saturados.");
+}
+
 app.post('/webhook', async (req, res) => {
     if (!req.body.queryResult) return res.json({ fulfillmentText: "Error de datos." });
 
@@ -12,34 +34,14 @@ app.post('/webhook', async (req, res) => {
     console.log("Usuario dijo:", userQuery);
 
     try {
-        // Usamos la versión 2.0 que apareció en tu lista de modelos disponibles
-        const model = genAI.getGenerativeModel({ 
-            model: "gemini-flash-latest" 
-        });
-
-        const chat = model.startChat({
-            history: [],
-            generationConfig: { maxOutputTokens: 500 },
-        });
-
-        const prompt = `Actúa como vendedor de 'Venta de Equipaje'. Responde brevemente a: ${userQuery}`;
-        
-        const result = await chat.sendMessage(prompt);
-        const response = await result.response;
-        const text = response.text();
-
-        return res.json({ fulfillmentText: text });
-
-    } catch (error) {
-        console.error("Error detallado:", error);
-        // Si el error es 404 de nuevo, el bot te lo dirá en el chat para avisarte
+        const botReply = await getAIResponse(userQuery);
+        return res.json({ fulfillmentText: botReply });
+    } catch (finalError) {
         return res.json({ 
-            fulfillmentText: "Error 404: El modelo no fue encontrado. Intenta cambiar el nombre en el código." 
+            fulfillmentText: "Lo siento, mis sistemas están muy ocupados en este momento. ¿Puedes preguntarme de nuevo en un minuto?" 
         });
     }
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`Servidor listo en puerto ${PORT}`));
-
-
+app.listen(PORT, () => console.log(`Bot multimodelo listo en puerto ${PORT}`));
