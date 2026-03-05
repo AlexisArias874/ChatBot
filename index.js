@@ -5,40 +5,49 @@ app.use(express.json());
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
+// OBJETO PARA GUARDAR EL HISTORIAL DE CADA USUARIO
+const chatSessions = new Map();
+
 app.post('/webhook', async (req, res) => {
-    if (!req.body.queryResult) return res.json({ fulfillmentText: "Error de datos." });
+    const sessionID = req.body.session; // ID único de la charla en Messenger/Dialogflow
     const userQuery = req.body.queryResult.queryText;
 
     try {
-        // USANDO EL MODELO EXACTO DE TU LISTA: gemini-2.0-flash-lite
-        // Este es el que tiene más probabilidad de tener cuota gratuita libre
-        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-lite" });
+        // 1. OBTENER O CREAR LA SESIÓN DE ESTE USUARIO
+        if (!chatSessions.has(sessionID)) {
+            const model = genAI.getGenerativeModel({ 
+                model: "gemini-2.0-flash-lite", // El modelo Lite que te funcionó
+                systemInstruction: `
+                    Eres un experto vendedor de la tienda 'Venta de Equipaje'.
+                    PRODUCTOS DISPONIBLES: 🎒 Mochila, 🧳 Maleta, 👜 Bolso.
+                    TAMAÑOS: Pequeña, Mediana, Grande.
+                    COLORES: Negra, Blanca, Gris.
+                    
+                    REGLAS DE COMPORTAMIENTO:
+                    1. Sé amable, profesional y puedes hacer bromas sobre viajes o maletas.
+                    2. Si el usuario intenta hablar de otra cosa, redirígelo amablemente a la compra.
+                    3. Cuando el usuario confirme su pedido (tenga producto, tamaño y color), inventa un "Precio Total" (ej: $1,500 MXN).
+                    4. Mantén las respuestas cortas para Messenger.
+                `
+            });
+            // Iniciamos el chat para este usuario nuevo
+            chatSessions.set(sessionID, model.startChat({ history: [] }));
+        }
 
-        const result = await model.generateContent(
-            `Eres un vendedor de equipo de equipaje, puede ser cualquier opcion de las tres siguientes 🎒Mochila🧳Maleta👜Bolso, con sus respectivos tamaños, Pequeña   Mediana   Grande, con sus respectivos colores cada una Negra   Blanca   Gris, al detectar el intent que nos dice que si se quiere confirmar el pedido
-            tienes que desplegar un precio total, tu asignalo la primera vez y despues yo te lo dare, puedes hacer bromas relacionadas al equipaje, saludar, no ser grosero, actuar de alguna manera en especifico, etc, pero si se trata de hacer alguna otra accion no relacionada con la compra, debes de soliciar al usuario
-            seguir con los pasos para la compra de equipaje, de manera amable${userQuery}`
-        );
-        
-        return res.json({ fulfillmentText: result.response.text() });
+        const chat = chatSessions.get(sessionID);
+
+        // 2. ENVIAR EL MENSAJE AL CHAT (Esto mantiene la memoria)
+        const result = await chat.sendMessage(userQuery);
+        const responseAI = await result.response;
+        const botReply = responseAI.text();
+
+        return res.json({ fulfillmentText: botReply });
 
     } catch (error) {
-        console.error("Error con 2.0-flash-lite, intentando gemini-flash-lite-latest...");
-        
-        try {
-            // PLAN B: Otro modelo Lite de tu lista que debería ser gratuito
-            const backupModel = genAI.getGenerativeModel({ model: "gemini-flash-lite-latest" });
-            const resultBackup = await backupModel.generateContent(userQuery);
-            return res.json({ fulfillmentText: resultBackup.response.text() });
-        } catch (err2) {
-            console.error("Ambos fallaron:", err2.message);
-            return res.json({ 
-                fulfillmentText: "Mis sistemas están saturados. Por favor, intenta de nuevo en unos segundos." 
-            });
-        }
+        console.error("Error en el chat:", error);
+        return res.json({ fulfillmentText: "Lo siento, me distraje un poco. ¿Qué decíamos de tu maleta?" });
     }
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`Servidor activo usando modelos Lite de tu lista`));
-
+app.listen(PORT, () => console.log(`Bot con memoria listo`));
