@@ -1,193 +1,73 @@
 const express = require("express");
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const axios = require("axios"); // Usaremos axios para la API gratuita
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
+// Mapa para guardar un poco de contexto si lo deseas (opcional)
 const chatSessions = new Map();
-let MODELOS_DISPONIBLES = [];
 
-// pausa para evitar rate limit
-function sleep(ms){
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-//////////////////////////////////////////////////////
-// OBTENER MODELOS DISPONIBLES
-//////////////////////////////////////////////////////
-
-async function cargarModelos(){
-
-    try{
-
-        const models = await genAI.listModels();
-
-        MODELOS_DISPONIBLES = models
-        .filter(m => m.supportedGenerationMethods.includes("generateContent"))
-        .map(m => m.name.replace("models/",""));
-
-        console.log("===== MODELOS DISPONIBLES =====");
-
-        MODELOS_DISPONIBLES.forEach(m=>{
-            console.log("✔", m);
-        });
-
-        console.log("===============================");
-
-    }catch(error){
-
-        console.error("Error obteniendo modelos:", error.message);
-
+/**
+ * Función que conecta con la API gratuita de Pollinations.ai
+ */
+async function generarRespuestaCreativa(userQuery, intentName) {
+    // Definimos la personalidad del vendedor
+    const systemPrompt = "Eres el mejor vendedor de 'Venta de Equipaje'. Vendes mochilas, maletas y bolsos. Eres amable e ingenioso.";
+    
+    // Si es un Fallback (Dialogflow no entendió), pedimos creatividad extra
+    let instruccionExtra = "";
+    if (intentName.includes("Fallback") || intentName === "Default") {
+        instruccionExtra = " El usuario dijo algo que no entendiste. Responde de forma muy creativa o con un chiste sobre viajes, y trata de que vuelva a interesarse por una maleta.";
     }
 
-}
+    // Construimos la URL para la API (Pollinations no necesita API KEY)
+    // Usamos el modelo 'openai' (que es gratuito a través de su gateway)
+    const url = `https://text.pollinations.ai/${encodeURIComponent(userQuery)}?system=${encodeURIComponent(systemPrompt + instruccionExtra)}&model=openai`;
 
-//////////////////////////////////////////////////////
-// GENERAR RESPUESTA CON FALLBACK
-//////////////////////////////////////////////////////
-
-async function generarRespuesta(userQuery, sessionID){
-
-    if(MODELOS_DISPONIBLES.length === 0){
-        throw new Error("No hay modelos disponibles");
+    try {
+        const response = await axios.get(url);
+        return response.data; // La API devuelve el texto directamente
+    } catch (error) {
+        console.error("Error en API externa:", error.message);
+        return "¡Uy! Mi sistema de equipaje se quedó trabado en la aduana. 🧳 ¿Me repites la pregunta?";
     }
-
-    for(let modelo of MODELOS_DISPONIBLES){
-
-        try{
-
-            console.log("Intentando modelo:", modelo);
-
-            const model = genAI.getGenerativeModel({
-                model: modelo,
-                systemInstruction:
-                "Eres el mejor vendedor de 'Venta de Equipaje'. Vendes mochilas, maletas y bolsos. Eres amable y ayudas al cliente a elegir.",
-                generationConfig:{
-                    maxOutputTokens:200,
-                    temperature:0.7
-                }
-            });
-
-            if(!chatSessions.has(sessionID)){
-                chatSessions.set(sessionID, model.startChat({ history: [] }));
-            }
-
-            const chat = chatSessions.get(sessionID);
-
-            const result = await chat.sendMessage(userQuery);
-
-            return result.response.text();
-
-        }catch(error){
-
-            console.log(`Fallo en ${modelo}:`, error.message);
-
-            if(error.message.includes("429")){
-                console.log("Rate limit, esperando...");
-                await sleep(8000);
-                continue;
-            }
-
-            if(
-                error.message.includes("503") ||
-                error.message.includes("404")
-            ){
-                continue;
-            }
-
-            chatSessions.delete(sessionID);
-        }
-
-    }
-
-    throw new Error("Ningún modelo respondió");
-
 }
 
 //////////////////////////////////////////////////////
 // WEBHOOK PARA DIALOGFLOW
 //////////////////////////////////////////////////////
 
-app.post("/webhook", async (req,res)=>{
-
+app.post("/webhook", async (req, res) => {
     const sessionID = req.body.session;
+    const userQuery = req.body.queryResult.queryText;
+    const intentName = req.body.queryResult.intent 
+        ? req.body.queryResult.intent.displayName 
+        : "Default";
 
-    const userQuery =
-    req.body.queryResult.queryText;
-
-    const intentName =
-    req.body.queryResult.intent
-    ? req.body.queryResult.intent.displayName
-    : "Default";
-
-    try{
-
-        if(
-            userQuery.toLowerCase() === "reiniciar" ||
-            intentName === "NuevoPedido"
-        ){
+    try {
+        // Si el usuario quiere reiniciar
+        if (userQuery.toLowerCase() === "reiniciar") {
             chatSessions.delete(sessionID);
         }
 
-        const respuesta =
-        await generarRespuesta(userQuery, sessionID);
+        // Llamamos a la API creativa
+        const respuesta = await generarRespuestaCreativa(userQuery, intentName);
 
         res.json({
             fulfillmentText: respuesta
         });
 
-    }catch(err){
-
-        console.log("Fallback activado");
-
-        const fallbacks = {
-
-            "ElegirProducto":
-            "¡Uy! Mis sistemas de maletas están algo lentos 🧳 ¿Buscas mochila, maleta o bolso?",
-
-            "ElegirTamaño":
-            "Se me perdió la cinta métrica un segundo 😂 ¿La quieres pequeña, mediana o grande?",
-
-            "ElegirColor":
-            "¡Tenemos varios colores! 🎨 ¿Negro, blanco o gris?"
-        };
-
-        const msg =
-        fallbacks[intentName] ||
-        "Perdón, hay mucha gente en la tienda 😅 ¿Puedes repetir tu pregunta?";
-
+    } catch (err) {
         res.json({
-            fulfillmentText: msg
+            fulfillmentText: "Perdón, hubo un pequeño error en la tienda. 😅 ¿En qué puedo ayudarte?"
         });
-
     }
-
 });
 
-//////////////////////////////////////////////////////
-// ENDPOINT PARA VER MODELOS
-//////////////////////////////////////////////////////
-
-app.get("/modelos",(req,res)=>{
-
-    res.json({
-        modelos: MODELOS_DISPONIBLES
-    });
-
-});
-
-//////////////////////////////////////////////////////
-// INICIAR SERVIDOR
-//////////////////////////////////////////////////////
+// Ruta base para que Render sepa que el sitio está vivo
+app.get("/", (req, res) => res.send("Servidor de Equipaje Activo 🚀"));
 
 const PORT = process.env.PORT || 10000;
-
-app.listen(PORT, async ()=>{
-
-    console.log("🚀 Servidor iniciado");
-
-    await cargarModelos();
-
+app.listen(PORT, () => {
+    console.log(`🚀 Servidor iniciado en puerto ${PORT}`);
 });
