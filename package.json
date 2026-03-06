@@ -1,5 +1,5 @@
 {
-  "name": "webhook-gemini",
+  "name": "webhook-libre-creative",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
@@ -7,6 +7,9 @@
   },
   "dependencies": {
     "express": "^4.18.2",
-    "@google/generative-ai": "^0.11.0"
+    "axios": "^1.6.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
