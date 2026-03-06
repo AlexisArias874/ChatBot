@@ -1,56 +1,40 @@
 const express = require("express");
-const axios = require("axios"); // Usaremos axios para la API gratuita
+const axios = require("axios");
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
 
-// Mapa para guardar un poco de contexto si lo deseas (opcional)
-const chatSessions = new Map();
-
-/**
- * Función que conecta con la API gratuita de Pollinations.ai
- */
 async function generarRespuestaCreativa(userQuery, intentName) {
-    // Definimos la personalidad del vendedor
-    const systemPrompt = "Eres el mejor vendedor de 'Venta de Equipaje'. Vendes mochilas, maletas y bolsos. Eres amable e ingenioso.";
+    // Prompt más corto = Respuesta más rápida
+    const systemPrompt = "Eres un vendedor de maletas amable y breve. Responde en menos de 20 palabras.";
     
-    // Si es un Fallback (Dialogflow no entendió), pedimos creatividad extra
-    let instruccionExtra = "";
-    if (intentName.includes("Fallback") || intentName === "Default") {
-        instruccionExtra = " El usuario dijo algo que no entendiste. Responde de forma muy creativa o con un chiste sobre viajes, y trata de que vuelva a interesarse por una maleta.";
-    }
+    // Si es fallback, pedimos algo ingenioso pero MUY corto
+    const instruccion = (intentName.includes("Fallback") || intentName === "Default")
+        ? " El usuario no fue claro. Sé creativo y breve."
+        : "";
 
-    // Construimos la URL para la API (Pollinations no necesita API KEY)
-    // Usamos el modelo 'openai' (que es gratuito a través de su gateway)
-    const url = `https://text.pollinations.ai/${encodeURIComponent(userQuery)}?system=${encodeURIComponent(systemPrompt + instruccionExtra)}&model=openai`;
+    // Construimos la URL. Agregamos 'seed' aleatorio para evitar que la API cachee respuestas viejas
+    const seed = Math.floor(Math.random() * 1000);
+    const url = `https://text.pollinations.ai/${encodeURIComponent(userQuery)}?system=${encodeURIComponent(systemPrompt + instruccion)}&model=openai&seed=${seed}`;
 
     try {
-        const response = await axios.get(url);
-        return response.data; // La API devuelve el texto directamente
+        // Configuramos un TIMEOUT de 4000ms (4 segundos)
+        // Si la API no responde en 4 segundos, axios lanzará un error
+        const response = await axios.get(url, { timeout: 4000 });
+        return response.data;
     } catch (error) {
-        console.error("Error en API externa:", error.message);
-        return "¡Uy! Mi sistema de equipaje se quedó trabado en la aduana. 🧳 ¿Me repites la pregunta?";
+        console.error("Error o Tiempo excedido:", error.message);
+        // Si tarda mucho, enviamos esta respuesta rápida para que Dialogflow no falle
+        return "¡Uy! Mi catálogo de maletas es tan grande que me perdí buscándola. 😂 ¿Me repites eso?";
     }
 }
 
-//////////////////////////////////////////////////////
-// WEBHOOK PARA DIALOGFLOW
-//////////////////////////////////////////////////////
-
 app.post("/webhook", async (req, res) => {
-    const sessionID = req.body.session;
     const userQuery = req.body.queryResult.queryText;
-    const intentName = req.body.queryResult.intent 
-        ? req.body.queryResult.intent.displayName 
-        : "Default";
+    const intentName = req.body.queryResult.intent ? req.body.queryResult.intent.displayName : "Default";
 
     try {
-        // Si el usuario quiere reiniciar
-        if (userQuery.toLowerCase() === "reiniciar") {
-            chatSessions.delete(sessionID);
-        }
-
-        // Llamamos a la API creativa
+        // Intentamos obtener la respuesta de la API
         const respuesta = await generarRespuestaCreativa(userQuery, intentName);
 
         res.json({
@@ -59,15 +43,12 @@ app.post("/webhook", async (req, res) => {
 
     } catch (err) {
         res.json({
-            fulfillmentText: "Perdón, hubo un pequeño error en la tienda. 😅 ¿En qué puedo ayudarte?"
+            fulfillmentText: "Estamos recibiendo muchos clientes, ¡vuelve a preguntarme!"
         });
     }
 });
 
-// Ruta base para que Render sepa que el sitio está vivo
-app.get("/", (req, res) => res.send("Servidor de Equipaje Activo 🚀"));
+app.get("/", (req, res) => res.send("OK"));
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-    console.log(`🚀 Servidor iniciado en puerto ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 Puerto: ${PORT}`));
