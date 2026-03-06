@@ -1,46 +1,76 @@
-const express = require('express');
+const express = require("express");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "2mb" }));
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const chatSessions = new Map();
 
-// función para esperar
+const chatSessions = new Map();
+let MODELOS_DISPONIBLES = [];
+
+// pausa para evitar rate limit
 function sleep(ms){
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// --- FUNCIÓN DE RESPUESTA CON FALLBACK ---
-async function generarRespuesta(userQuery, sessionID) {
+//////////////////////////////////////////////////////
+// OBTENER MODELOS DISPONIBLES
+//////////////////////////////////////////////////////
 
-    // lista de modelos en orden de prioridad
-    const modelos = [
-        "gemini-1.5-flash",
-        "gemini-1.5-flash-latest",
-        "gemini-1.5-pro",
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite"
-    ];
+async function cargarModelos(){
 
-    for (let nombreModelo of modelos) {
+    try{
 
-        try {
+        const models = await genAI.listModels();
 
-            console.log(`Intentando modelo: ${nombreModelo}`);
+        MODELOS_DISPONIBLES = models
+        .filter(m => m.supportedGenerationMethods.includes("generateContent"))
+        .map(m => m.name.replace("models/",""));
+
+        console.log("===== MODELOS DISPONIBLES =====");
+
+        MODELOS_DISPONIBLES.forEach(m=>{
+            console.log("✔", m);
+        });
+
+        console.log("===============================");
+
+    }catch(error){
+
+        console.error("Error obteniendo modelos:", error.message);
+
+    }
+
+}
+
+//////////////////////////////////////////////////////
+// GENERAR RESPUESTA CON FALLBACK
+//////////////////////////////////////////////////////
+
+async function generarRespuesta(userQuery, sessionID){
+
+    if(MODELOS_DISPONIBLES.length === 0){
+        throw new Error("No hay modelos disponibles");
+    }
+
+    for(let modelo of MODELOS_DISPONIBLES){
+
+        try{
+
+            console.log("Intentando modelo:", modelo);
 
             const model = genAI.getGenerativeModel({
-                model: nombreModelo,
+                model: modelo,
                 systemInstruction:
-                "Eres el mejor vendedor de 'Venta de Equipaje'. Vendes mochilas, maletas y bolsos. Eres amable y cierras ventas.",
-                generationConfig: {
-                    maxOutputTokens: 200,
-                    temperature: 0.7
+                "Eres el mejor vendedor de 'Venta de Equipaje'. Vendes mochilas, maletas y bolsos. Eres amable y ayudas al cliente a elegir.",
+                generationConfig:{
+                    maxOutputTokens:200,
+                    temperature:0.7
                 }
             });
 
-            if (!chatSessions.has(sessionID)) {
+            if(!chatSessions.has(sessionID)){
                 chatSessions.set(sessionID, model.startChat({ history: [] }));
             }
 
@@ -50,88 +80,114 @@ async function generarRespuesta(userQuery, sessionID) {
 
             return result.response.text();
 
-        } catch (error) {
+        }catch(error){
 
-            console.error(`Fallo en ${nombreModelo}:`, error.message);
+            console.log(`Fallo en ${modelo}:`, error.message);
 
-            // límite de requests
-            if (error.message.includes("429")) {
-                console.log("Rate limit alcanzado, esperando 10s...");
-                await sleep(10000);
+            if(error.message.includes("429")){
+                console.log("Rate limit, esperando...");
+                await sleep(8000);
                 continue;
             }
 
-            // modelo saturado
-            if (error.message.includes("503")) {
-                console.log("Modelo saturado, probando otro...");
-                continue;
-            }
-
-            // modelo no encontrado
-            if (error.message.includes("404")) {
-                console.log("Modelo no disponible...");
+            if(
+                error.message.includes("503") ||
+                error.message.includes("404")
+            ){
                 continue;
             }
 
             chatSessions.delete(sessionID);
         }
+
     }
 
-    throw new Error("Ningún modelo respondió.");
+    throw new Error("Ningún modelo respondió");
+
 }
 
-app.post('/webhook', async (req, res) => {
+//////////////////////////////////////////////////////
+// WEBHOOK PARA DIALOGFLOW
+//////////////////////////////////////////////////////
+
+app.post("/webhook", async (req,res)=>{
 
     const sessionID = req.body.session;
-    const userQuery = req.body.queryResult.queryText;
+
+    const userQuery =
+    req.body.queryResult.queryText;
 
     const intentName =
-        req.body.queryResult.intent
-        ? req.body.queryResult.intent.displayName
-        : "Default";
+    req.body.queryResult.intent
+    ? req.body.queryResult.intent.displayName
+    : "Default";
 
-    try {
+    try{
 
-        // reiniciar sesión manual
-        if (userQuery.toLowerCase() === "reiniciar" || intentName === "NuevoPedido") {
+        if(
+            userQuery.toLowerCase() === "reiniciar" ||
+            intentName === "NuevoPedido"
+        ){
             chatSessions.delete(sessionID);
         }
 
-        const botReply = await generarRespuesta(userQuery, sessionID);
+        const respuesta =
+        await generarRespuesta(userQuery, sessionID);
 
-        return res.json({
-            fulfillmentText: botReply
+        res.json({
+            fulfillmentText: respuesta
         });
 
-    } catch (err) {
+    }catch(err){
 
-        console.error("Error total:", err.message);
+        console.log("Fallback activado");
 
-        // fallback humanizado
         const fallbacks = {
 
             "ElegirProducto":
-                "¡Uy! Mis sistemas de maletas están algo lentos. 🧳 Pero cuéntame, ¿buscabas mochila, maleta o bolso?",
+            "¡Uy! Mis sistemas de maletas están algo lentos 🧳 ¿Buscas mochila, maleta o bolso?",
 
             "ElegirTamaño":
-                "Se me perdió la cinta métrica un segundo. 😂 ¿Qué tamaño prefieres: pequeña, mediana o grande?",
+            "Se me perdió la cinta métrica un segundo 😂 ¿La quieres pequeña, mediana o grande?",
 
             "ElegirColor":
-                "¡Qué colores tan padres! ¿Lo quieres en negro, blanco o gris? 🎨"
+            "¡Tenemos varios colores! 🎨 ¿Negro, blanco o gris?"
         };
 
         const msg =
-            fallbacks[intentName] ||
-            "Lo siento, hay mucha gente en la tienda. ¿Me repites tu duda? 😅";
+        fallbacks[intentName] ||
+        "Perdón, hay mucha gente en la tienda 😅 ¿Puedes repetir tu pregunta?";
 
-        return res.json({
+        res.json({
             fulfillmentText: msg
         });
+
     }
+
 });
+
+//////////////////////////////////////////////////////
+// ENDPOINT PARA VER MODELOS
+//////////////////////////////////////////////////////
+
+app.get("/modelos",(req,res)=>{
+
+    res.json({
+        modelos: MODELOS_DISPONIBLES
+    });
+
+});
+
+//////////////////////////////////////////////////////
+// INICIAR SERVIDOR
+//////////////////////////////////////////////////////
 
 const PORT = process.env.PORT || 10000;
 
-app.listen(PORT, () =>
-    console.log(`🚀 Servidor con fallback inteligente activo`)
-);
+app.listen(PORT, async ()=>{
+
+    console.log("🚀 Servidor iniciado");
+
+    await cargarModelos();
+
+});
