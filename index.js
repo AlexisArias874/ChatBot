@@ -4,67 +4,51 @@ const axios = require("axios");
 const app = express();
 app.use(express.json({ limit: "2mb" }));
 
-/**
- * Función que conecta con la API gratuita de Pollinations.ai
- * Se eliminó el timeout para permitir que la API termine de generar.
- */
 async function generarRespuestaCreativa(userQuery, intentName) {
-    // Prompt optimizado para ser lo más rápido posible
-    const systemPrompt = "Eres un vendedor amable de maletas y mochilas. Responde de forma creativa y breve.";
+    // Usamos solo los 2 modelos más rápidos de Pollinations
+    const modelos = ["mistral", "openai"]; 
     
-    let instruccionExtra = "";
-    if (intentName.includes("Fallback") || intentName === "Default") {
-        instruccionExtra = " El usuario dijo algo confuso, responde con ingenio sobre viajes.";
-    }
+    // Prompt ultra-corto para que la IA procese más rápido
+    const systemPrompt = "Vendedor de maletas. Breve y creativo.";
+    const esFallback = intentName.includes("Fallback") || intentName === "Default";
+    const promptFinal = esFallback ? `Responde con ingenio a: ${userQuery}` : userQuery;
 
-    // Usamos el modelo 'openai' que suele ser el más estable en Pollinations
-    const url = `https://text.pollinations.ai/${encodeURIComponent(userQuery)}?system=${encodeURIComponent(systemPrompt + instruccionExtra)}&model=openai`;
+    for (let modelo of modelos) {
+        try {
+            // Ponemos un timeout de solo 2 segundos por modelo. 
+            // Si no responde rápido, pasamos al siguiente para no agotar los 5s de Dialogflow.
+            const response = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(promptFinal)}`, {
+                params: {
+                    system: systemPrompt,
+                    model: modelo,
+                    seed: Math.floor(Math.random() * 1000)
+                },
+                timeout: 2200 
+            });
 
-    try {
-        // Realizamos la petición sin el parámetro de timeout
-        const response = await axios.get(url);
-        
-        // Verificamos que la respuesta sea válida
-        if (response.data) {
-            return response.data;
-        } else {
-            throw new Error("Respuesta vacía");
+            if (response.data) return response.data;
+        } catch (error) {
+            console.log(`Salto de modelo ${modelo} por lentitud o error.`);
+            continue; 
         }
-    } catch (error) {
-        console.error("Error en API externa:", error.message);
-        return "¡Uy! Mi sistema de equipaje está un poco lento hoy. 🧳 ¿Me podrías repetir la pregunta?";
     }
+    return "¡Hola! Estoy ordenando el inventario. 🧳 ¿En qué puedo ayudarte?";
 }
 
-//////////////////////////////////////////////////////
-// WEBHOOK PARA DIALOGFLOW
-//////////////////////////////////////////////////////
-
 app.post("/webhook", async (req, res) => {
+    // Respuesta inmediata: Si el servidor acaba de despertar, esto ayuda a mantener la conexión
     const userQuery = req.body.queryResult.queryText;
-    const intentName = req.body.queryResult.intent 
-        ? req.body.queryResult.intent.displayName 
-        : "Default";
+    const intentName = req.body.queryResult.intent ? req.body.queryResult.intent.displayName : "Default";
 
     try {
-        // Esperamos a que la API responda sin importar cuánto tarde
         const respuesta = await generarRespuestaCreativa(userQuery, intentName);
-
-        res.json({
-            fulfillmentText: respuesta
-        });
-
+        res.json({ fulfillmentText: respuesta });
     } catch (err) {
-        console.error("Error en Webhook:", err);
-        res.json({
-            fulfillmentText: "Hubo un pequeño error en la tienda, pero sigo aquí para ayudarte. ¿Qué buscabas?"
-        });
+        res.json({ fulfillmentText: "¡Qué buena pregunta! Dame un segundo para revisarlo." });
     }
 });
 
-app.get("/", (req, res) => res.send("Webhook de Equipaje corriendo sin límites de tiempo 🚀"));
+app.get("/", (req, res) => res.send("Servidor Activo"));
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-    console.log(`🚀 Servidor iniciado en puerto ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 Puerto: ${PORT}`));
