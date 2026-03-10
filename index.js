@@ -26,6 +26,7 @@ async function registrarEnSheets(datos) {
             Tamano: datos.tamano, // Usando tamano sin ñ
             Color: datos.color,
             Precio: datos.precio,
+            Estado: "Pendiente"
             Usuario: "Cliente Messenger"
         });
         console.log("✅ Pedido en Sheets");
@@ -108,6 +109,7 @@ app.get("/", (req, res) => res.send("Servidor Venta de Equipaje Activo"));
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 Puerto: ${PORT}`));
+
 
 
 
