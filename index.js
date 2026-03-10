@@ -69,15 +69,21 @@ app.post("/webhook", async (req, res) => {
 
     try {
         // LÓGICA DE REGISTRO: Si el intent es de confirmación
-        if (intentName === "ConfirmarPedido") {
-            await registrarEnSheets({
-                session: sessionID,
-                producto: params.producto || "Indefinido",
-                tamano: params.tamano || "Indefinido",
-                color: params.color || "Indefinido",
-                precio: "$1,500 MXN"
-            });
-        }
+
+console.log("Intent detectado:", intentName); // Esto te dirá en los logs si entró al intent correcto
+
+        if (intentName === "6.1 PasoFinalSi") {
+    console.log("Intent ConfirmarPedido detectado, iniciando registro en Sheets...");
+    console.log("Parámetros recibidos:", params); // Esto te dirá si viajan los datos
+    
+    await registrarEnSheets({
+        session: sessionID,
+        producto: params.producto || "Indefinido",
+        tamano: params.tamano || "Indefinido",
+        color: params.color || "Indefinido",
+        precio: "$1,500 MXN"
+    });
+}
 
         const respuesta = await generarRespuestaCreativa(userQuery, intentName);
         res.json({ fulfillmentText: respuesta });
@@ -99,3 +105,4 @@ app.get("/", (req, res) => res.send("Servidor Venta de Equipaje Activo"));
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 Puerto: ${PORT}`));
+
