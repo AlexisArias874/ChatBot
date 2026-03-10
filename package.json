@@ -1,15 +1,16 @@
 {
-  "name": "webhook-equipaje-gratis",
+  "name": "bot-equipaje",
   "version": "1.0.0",
+  "description": "Bot para venta de equipaje",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "axios": "^1.6.0"
-  },
-  "engines": {
-    "node": ">=18.0.0"
+    "axios": "^1.6.2",
+    "google-spreadsheet": "^4.1.1",
+    "google-auth-library": "^9.4.1"
   }
 }
+
