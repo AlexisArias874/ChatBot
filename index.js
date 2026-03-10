@@ -79,8 +79,9 @@ app.post("/webhook", async (req, res) => {
     const intentName = queryResult.intent ? queryResult.intent.displayName : "Default";
     const sessionID = req.body.session;
     const params = queryResult.parameters;
+    const userQuery = queryResult.queryText;
 
-    // Función para rescatar el nombre del cliente de los contextos
+    // Función auxiliar para obtener el nombre (la misma que ya tienes)
     const obtenerNombreUsuario = () => {
         if (params.person && params.person.name) return params.person.name;
         if (queryResult.outputContexts) {
@@ -95,7 +96,22 @@ app.post("/webhook", async (req, res) => {
     };
 
     try {
-        // DETECTAR PASO FINAL (6.1 o 7.1)
+        // --- NUEVA LÓGICA: PRE-CONFIRMACIÓN CON PRECIO ---
+        if (intentName === "5 SeleccionColor") {
+            const nombre = obtenerNombreUsuario();
+            const prod = params.producto || "Maleta";
+            const tam = params.tamano || "Mediana";
+            const col = params.color || "Gris";
+            const precio = calcularPrecio(prod, tam);
+
+            console.log(`Enviando pre-confirmación para ${nombre}: ${precio}`);
+
+            return res.json({ 
+                fulfillmentText: `Perfecto ${nombre}, has seleccionado ${prod} tamaño ${tam} de color ${col}. El costo total será de ${precio}. ¿Quieres confirmar tu pedido?` 
+            });
+        }
+
+        // --- LÓGICA DE REGISTRO FINAL (6.1 o 7.1) ---
         if (intentName === "6.1 PasoFinalSi" || intentName === "7.1 PasoEncuestaSi") {
             const id = generarIDPedido();
             const nombre = obtenerNombreUsuario();
@@ -114,22 +130,17 @@ app.post("/webhook", async (req, res) => {
             });
 
             return res.json({ 
-                fulfillmentText: `¡Listo, ${nombre}! 🥳 Tu pedido ha sido registrado con el ID: ${id}. Tu ${prod} ${tam} de color ${params.color || 'Gris'} está en proceso. El total es ${precio}. ¿Te gustaría responder una breve encuesta?` 
+                fulfillmentText: `¡Muchas gracias por tu pedido ${nombre}! Tu ID de seguimiento es ${id}. Estamos preparando tu ${prod} para enviarla lo antes posible. 🚀` 
             });
         }
 
-        // RESPUESTA DE IA PARA EL RESTO DE INTENTS
-        const respuesta = await generarRespuestaCreativa(queryResult.queryText, intentName);
-        res.json({ fulfillmentText: respuesta });
+        // --- RESPUESTA DE IA PARA EL RESTO DE INTENTS ---
+        const respuestaIA = await generarRespuestaCreativa(userQuery, intentName);
+        return res.json({ fulfillmentText: respuestaIA });
 
     } catch (err) {
         console.error("Error Webhook:", err.message);
-        const errores = {
-            "3.1 CompraProducto": "¡Uy! ¿Buscabas maleta, mochila o bolso? 🧳",
-            "4 SeleccionTamano": "No encuentro la cinta métrica. 📏 ¿Qué tamano prefieres: pequeña, mediana o grande?",
-            "5 SeleccionColor": "¡Qué colores tan padres! 🎨 ¿Lo quieres en negro, blanco o gris?"
-        };
-        res.json({ fulfillmentText: errores[intentName] || "¡Recibido! Tu pedido está en proceso. 🧳" });
+        res.json({ fulfillmentText: "¡Excelente elección! ¿Confirmamos tu pedido? 🧳" });
     }
 });
 
@@ -137,5 +148,6 @@ app.get("/", (req, res) => res.send("Servidor Venta de Equipaje ONLINE"));
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 Corriendo en puerto: ${PORT}`));
+
 
 
