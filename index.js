@@ -6,153 +6,86 @@ const { GoogleSpreadsheet } = require('google-spreadsheet');
 const app = express();
 app.use(express.json({ limit: "2mb" }));
 
-// --- 1. MATRIZ DE PRECIOS DINÁMICA ---
+// --- 1. MATRIZ DE PRECIOS OPTIMIZADA ---
 const PRECIOS = {
     "Mochila": { "Pequeña": "$600", "Mediana": "$850", "Grande": "$1,100" },
     "Maleta": { "Pequeña": "$1,200", "Mediana": "$1,500", "Grande": "$2,000" },
     "Bolso": { "Pequeña": "$400", "Mediana": "$600", "Grande": "$850" }
 };
 
-function calcularPrecio(producto, tamano) {
-    const p = producto.charAt(0).toUpperCase() + producto.slice(1).toLowerCase();
-    const t = tamano.charAt(0).toUpperCase() + tamano.slice(1).toLowerCase();
-    if (PRECIOS[p] && PRECIOS[p][t]) return `${PRECIOS[p][t]} MXN`;
-    return "$1,500 MXN";
-}
+const calcularPrecio = (p, t) => {
+    // Normalizamos para asegurar que coincida con la matriz
+    const prod = p?.charAt(0).toUpperCase() + p?.slice(1).toLowerCase();
+    const tam = t?.charAt(0).toUpperCase() + t?.slice(1).toLowerCase();
+    return (PRECIOS[prod] && PRECIOS[prod][tam]) ? `${PRECIOS[prod][tam]} MXN` : "$1,500 MXN";
+};
 
-// --- 2. GENERADOR DE ID ÚNICO ---
-function generarIDPedido() {
-    const fecha = new Date();
-    const formatoFecha = fecha.getFullYear().toString().slice(-2) + 
-                       (fecha.getMonth() + 1).toString().padStart(2, '0') + 
-                       fecha.getDate().toString().padStart(2, '0');
-    const random = Math.floor(1000 + Math.random() * 9000);
-    return `VE-${formatoFecha}-${random}`; // Ejemplo: VE-240310-4512
-}
-
-// --- 3. CONFIGURACIÓN DE GOOGLE SHEETS ---
+// --- 2. CONFIGURACIÓN GOOGLE SHEETS ---
 const serviceAccountAuth = new JWT({
-  email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-  key: process.env.GOOGLE_PRIVATE_KEY ? process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n') : '',
-  scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+    key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 const doc = new GoogleSpreadsheet(process.env.GOOGLE_SHEET_ID, serviceAccountAuth);
 
-async function registrarEnSheets(datos) {
+async function registrarEnSheets(d) {
     try {
         await doc.loadInfo();
-        const sheet = doc.sheetsByIndex[0];
- await sheet.addRow({
-            "ID_Pedido": datos.id,
-            "Fecha": new Date(),
-            "Usuario": datos.usuario,
-            "Producto": datos.producto,
-            "Tamaño": datos.tamano,
-            "Color": datos.color,
-            "Precio": datos.precio,
+        await doc.sheetsByIndex[0].addRow({
+            "ID_Pedido": `VE-${Date.now().toString().slice(-6)}`, // ID único basado en tiempo
+            "Fecha": new Date().toLocaleString(),
+            "Usuario": d.usuario,
+            "Producto": d.producto,
+            "Tamaño": d.tamano,
+            "Color": d.color,
+            "Precio": d.precio,
             "Estado": "Pendiente"
         });
-        console.log("✅ Pedido guardado en Sheets ID:", datos.id);
     } catch (e) { console.error("❌ Error Sheets:", e.message); }
 }
 
-// --- 4. LÓGICA DE IA (POLLINATIONS) ---
-async function generarRespuestaCreativa(userQuery, intentName) {
-    const modelos = ["mistral", "openai"]; 
-    const systemPrompt = "Vendedor experto de 'Venta de Equipaje'. Solo vendes: Mochila, Maleta, Bolso. Tamaños: Pequeña, Mediana, Grande. Colores: Negra, Blanca, Gris. Sé creativo, breve y cierra con pregunta.";
-
-    for (let modelo of modelos) {
-        try {
-            const response = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(userQuery)}`, {
-                params: { system: systemPrompt, model: modelo, seed: Math.floor(Math.random() * 1000) },
-                timeout: 2300 
-            });
-            if (response.data) return response.data;
-        } catch (error) { continue; }
-    }
-    return "¡Excelente elección! 🧳 ¿Confirmamos el pedido para enviarlo a bodega?";
-}
-
-// --- 5. WEBHOOK PRINCIPAL ---
+// --- 3. WEBHOOK PRINCIPAL ---
 app.post("/webhook", async (req, res) => {
-    const queryResult = req.body.queryResult;
-    const intentName = queryResult.intent ? queryResult.intent.displayName : "Default";
-    const sessionID = req.body.session;
-    const userQuery = queryResult.queryText;
-
-    // --- FUNCIÓN INTELIGENTE PARA BUSCAR PARÁMETROS EN CUALQUIER CONTEXTO ---
-    const obtenerDatoDeMemoria = (nombreParametro) => {
-        // 1. Intentamos en los parámetros directos del mensaje actual
-        let valor = queryResult.parameters[nombreParametro];
-        
-        // 2. Si no está, lo buscamos en los Contextos (historial)
-        if (!valor && queryResult.outputContexts) {
-            for (let ctx of queryResult.outputContexts) {
-                if (ctx.parameters && ctx.parameters[nombreParametro]) {
-                    valor = ctx.parameters[nombreParametro];
-                    break;
-                }
-            }
-        }
-        return valor; // Retorna el valor encontrado o undefined
-    };
-
-    // Función para obtener el nombre (usando la búsqueda inteligente)
-    const nombre = obtenerDatoDeMemoria("person") || "Cliente";
-    const nombreFinal = typeof nombre === 'object' ? nombre.name : nombre;
+    const { queryResult, session } = req.body;
+    const intentName = queryResult.intent?.displayName;
+    const params = queryResult.parameters; // Aquí vienen tus datos de la imagen
+    
+    // Extraemos según los nombres exactos de tu imagen
+    const producto = params.producto || "Maleta";
+    const tamano = params.tamano || "Mediana";
+    const color = params.color || "Gris";
+    // Si 'usuario' viene como objeto (sys.person), extraemos el nombre, si no, el string
+    const usuario = params.usuario?.name || params.usuario || "Cliente";
 
     try {
-        // --- LÓGICA: PRE-CONFIRMACIÓN (INTENT 5 SELECCIONCOLOR) ---
+        // PASO 5: PRE-CONFIRMACIÓN (Muestra el precio)
         if (intentName === "5 SeleccionColor") {
-            // Buscamos los datos reales en la memoria
-            const prod = obtenerDatoDeMemoria("producto") || "Maleta";
-            const tam = obtenerDatoDeMemoria("tamano") || "Mediana";
-            const col = obtenerDatoDeMemoria("color") || "Gris";
-            const precio = calcularPrecio(prod, tam);
-
+            const precio = calcularPrecio(producto, tamano);
             return res.json({ 
-                fulfillmentText: `Perfecto ${nombreFinal}, has seleccionado ${prod} tamaño ${tam} de color ${col}. El costo total será de ${precio}. ¿Quieres confirmar tu pedido?` 
+                fulfillmentText: `Perfecto ${usuario}, has seleccionado ${producto} tamaño ${tamano} de color ${color}. El costo total será de ${precio}. ¿Quieres confirmar tu pedido?` 
             });
         }
 
-        // --- LÓGICA: REGISTRO FINAL (INTENT 6.1 O 7.1) ---
+        // PASO 6.1: REGISTRO FINAL
         if (intentName === "6.1 PasoFinalSi" || intentName === "7.1 PasoEncuestaSi") {
-            const id = generarIDPedido();
-            const prod = obtenerDatoDeMemoria("producto") || "Maleta";
-            const tam = obtenerDatoDeMemoria("tamano") || "Mediana";
-            const col = obtenerDatoDeMemoria("color") || "Gris";
-            const precio = calcularPrecio(prod, tam);
-
-            await registrarEnSheets({
-                id: id,
-                session: sessionID,
-                usuario: nombreFinal,
-                producto: prod,
-                tamano: tam,
-                color: col,
-                precio: precio
-            });
-
+            const precio = calcularPrecio(producto, tamano);
+            await registrarEnSheets({ usuario, producto, tamano, color, precio, session });
+            
             return res.json({ 
-                fulfillmentText: `¡Muchas gracias, ${nombreFinal}! Tu ID es ${id}. Tu ${prod} ${tam} ${col} ya está en camino. 🚀` 
+                fulfillmentText: `¡Excelente, ${usuario}! Tu pedido de ${producto} ${tamano} ha sido registrado. ¡Gracias por tu compra! 🚀` 
             });
         }
 
-        // ... (Resto del código IA Pollinations) ...
-        const respuestaIA = await generarRespuestaCreativa(userQuery, intentName);
-        res.json({ fulfillmentText: respuestaIA });
+        // --- IA PARA OTROS INTENTS ---
+        const aiResp = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(queryResult.queryText)}`, {
+            params: { system: "Vendedor de maletas breve.", model: "mistral" },
+            timeout: 2500
+        });
+        res.json({ fulfillmentText: aiResp.data });
 
     } catch (err) {
-        console.error("Error:", err.message);
         res.json({ fulfillmentText: "¡Excelente elección! ¿Confirmamos el pedido? 🧳" });
     }
 });
 
-app.get("/", (req, res) => res.send("Servidor Venta de Equipaje ONLINE"));
-
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 Corriendo en puerto: ${PORT}`));
-
-
-
-
+app.listen(process.env.PORT || 10000);
