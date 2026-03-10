@@ -78,69 +78,73 @@ app.post("/webhook", async (req, res) => {
     const queryResult = req.body.queryResult;
     const intentName = queryResult.intent ? queryResult.intent.displayName : "Default";
     const sessionID = req.body.session;
-    const params = queryResult.parameters;
     const userQuery = queryResult.queryText;
 
-    // Función auxiliar para obtener el nombre (la misma que ya tienes)
-    const obtenerNombreUsuario = () => {
-        if (params.person && params.person.name) return params.person.name;
-        if (queryResult.outputContexts) {
+    // --- FUNCIÓN INTELIGENTE PARA BUSCAR PARÁMETROS EN CUALQUIER CONTEXTO ---
+    const obtenerDatoDeMemoria = (nombreParametro) => {
+        // 1. Intentamos en los parámetros directos del mensaje actual
+        let valor = queryResult.parameters[nombreParametro];
+        
+        // 2. Si no está, lo buscamos en los Contextos (historial)
+        if (!valor && queryResult.outputContexts) {
             for (let ctx of queryResult.outputContexts) {
-                if (ctx.parameters && ctx.parameters.person) {
-                    const p = ctx.parameters.person;
-                    return typeof p === 'object' ? p.name : p;
+                if (ctx.parameters && ctx.parameters[nombreParametro]) {
+                    valor = ctx.parameters[nombreParametro];
+                    break;
                 }
             }
         }
-        return "Cliente";
+        return valor; // Retorna el valor encontrado o undefined
     };
 
+    // Función para obtener el nombre (usando la búsqueda inteligente)
+    const nombre = obtenerDatoDeMemoria("person") || "Cliente";
+    const nombreFinal = typeof nombre === 'object' ? nombre.name : nombre;
+
     try {
-        // --- NUEVA LÓGICA: PRE-CONFIRMACIÓN CON PRECIO ---
+        // --- LÓGICA: PRE-CONFIRMACIÓN (INTENT 5 SELECCIONCOLOR) ---
         if (intentName === "5 SeleccionColor") {
-            const nombre = obtenerNombreUsuario();
-            const prod = params.producto || "Maleta";
-            const tam = params.tamano || "Mediana";
-            const col = params.color || "Gris";
+            // Buscamos los datos reales en la memoria
+            const prod = obtenerDatoDeMemoria("producto") || "Maleta";
+            const tam = obtenerDatoDeMemoria("tamano") || "Mediana";
+            const col = obtenerDatoDeMemoria("color") || "Gris";
             const precio = calcularPrecio(prod, tam);
 
-            console.log(`Enviando pre-confirmación para ${nombre}: ${precio}`);
-
             return res.json({ 
-                fulfillmentText: `Perfecto ${nombre}, has seleccionado ${prod} tamaño ${tam} de color ${col}. El costo total será de ${precio}. ¿Quieres confirmar tu pedido?` 
+                fulfillmentText: `Perfecto ${nombreFinal}, has seleccionado ${prod} tamaño ${tam} de color ${col}. El costo total será de ${precio}. ¿Quieres confirmar tu pedido?` 
             });
         }
 
-        // --- LÓGICA DE REGISTRO FINAL (6.1 o 7.1) ---
+        // --- LÓGICA: REGISTRO FINAL (INTENT 6.1 O 7.1) ---
         if (intentName === "6.1 PasoFinalSi" || intentName === "7.1 PasoEncuestaSi") {
             const id = generarIDPedido();
-            const nombre = obtenerNombreUsuario();
-            const prod = params.producto || "Maleta";
-            const tam = params.tamano || "Mediana";
+            const prod = obtenerDatoDeMemoria("producto") || "Maleta";
+            const tam = obtenerDatoDeMemoria("tamano") || "Mediana";
+            const col = obtenerDatoDeMemoria("color") || "Gris";
             const precio = calcularPrecio(prod, tam);
 
             await registrarEnSheets({
                 id: id,
                 session: sessionID,
-                usuario: nombre,
+                usuario: nombreFinal,
                 producto: prod,
                 tamano: tam,
-                color: params.color || "Gris",
+                color: col,
                 precio: precio
             });
 
             return res.json({ 
-                fulfillmentText: `¡Muchas gracias por tu pedido ${nombre}! Tu ID de seguimiento es ${id}. Estamos preparando tu ${prod} para enviarla lo antes posible. 🚀` 
+                fulfillmentText: `¡Muchas gracias, ${nombreFinal}! Tu ID es ${id}. Tu ${prod} ${tam} ${col} ya está en camino. 🚀` 
             });
         }
 
-        // --- RESPUESTA DE IA PARA EL RESTO DE INTENTS ---
+        // ... (Resto del código IA Pollinations) ...
         const respuestaIA = await generarRespuestaCreativa(userQuery, intentName);
-        return res.json({ fulfillmentText: respuestaIA });
+        res.json({ fulfillmentText: respuestaIA });
 
     } catch (err) {
-        console.error("Error Webhook:", err.message);
-        res.json({ fulfillmentText: "¡Excelente elección! ¿Confirmamos tu pedido? 🧳" });
+        console.error("Error:", err.message);
+        res.json({ fulfillmentText: "¡Excelente elección! ¿Confirmamos el pedido? 🧳" });
     }
 });
 
@@ -148,6 +152,7 @@ app.get("/", (req, res) => res.send("Servidor Venta de Equipaje ONLINE"));
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 Corriendo en puerto: ${PORT}`));
+
 
 
 
