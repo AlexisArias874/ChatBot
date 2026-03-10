@@ -6,6 +6,25 @@ const { GoogleSpreadsheet } = require('google-spreadsheet');
 const app = express();
 app.use(express.json({ limit: "2mb" }));
 
+// --- MATRIZ DE PRECIOS DINÁMICA ---
+const PRECIOS = {
+    "Mochila": { "Pequeña": "$600", "Mediana": "$850", "Grande": "$1,100" },
+    "Maleta": { "Pequeña": "$1,200", "Mediana": "$1,500", "Grande": "$2,000" },
+    "Bolso": { "Pequeña": "$400", "Mediana": "$600", "Grande": "$850" }
+};
+
+// Función para obtener el precio dinámico
+function calcularPrecio(producto, tamano) {
+    // Normalizamos los nombres para que coincidan con la matriz (Primera letra mayúscula)
+    const p = producto.charAt(0).toUpperCase() + producto.slice(1).toLowerCase();
+    const t = tamano.charAt(0).toUpperCase() + tamano.slice(1).toLowerCase();
+
+    if (PRECIOS[p] && PRECIOS[p][t]) {
+        return `${PRECIOS[p][t]} MXN`;
+    }
+    return "$1,500 MXN"; // Precio base por si falla la detección
+}
+
 // --- CONFIGURACIÓN DE GOOGLE SHEETS ---
 const serviceAccountAuth = new JWT({
   email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
@@ -14,7 +33,6 @@ const serviceAccountAuth = new JWT({
 });
 const doc = new GoogleSpreadsheet(process.env.GOOGLE_SHEET_ID, serviceAccountAuth);
 
-// Función para registrar en la hoja
 async function registrarEnSheets(datos) {
     try {
         await doc.loadInfo();
@@ -23,11 +41,11 @@ async function registrarEnSheets(datos) {
             Fecha: new Date().toLocaleString(),
             Sesion: datos.session,
             Producto: datos.producto,
-            Tamano: datos.tamano, // Usando tamano sin ñ
+            "Tamaño": datos.tamano, // Usamos la Ñ para que coincida con tu encabezado de Excel
             Color: datos.color,
             Precio: datos.precio,
-            Estado: "Pendiente"
-            Usuario: "Cliente Messenger"
+            Estado: "Pendiente",
+            Usuario: datos.usuario || "Cliente Messenger"
         });
         console.log("✅ Pedido en Sheets");
     } catch (e) { console.error("❌ Error Sheets:", e.message); }
@@ -35,22 +53,12 @@ async function registrarEnSheets(datos) {
 
 async function generarRespuestaCreativa(userQuery, intentName) {
     const modelos = ["mistral", "openai"]; 
-    
-    // Contexto de negocio inyectado en el prompt de sistema
-    const systemPrompt = `Vendedor experto de 'Venta de Equipaje'. 
-    Solo vendes: Mochila, Maleta, Bolso. 
-    Tamaños: Pequeña, Mediana, Grande. 
-    Colores: Negra, Blanca, Gris. 
-    Sé creativo, breve y cierra ventas siempre con una pregunta.`;
+    const systemPrompt = `Vendedor experto de 'Venta de Equipaje'. Solo vendes: Mochila, Maleta, Bolso. Tamaños: Pequeña, Mediana, Grande. Colores: Negra, Blanca, Gris. Sé creativo, breve y cierra ventas siempre con una pregunta.`;
 
     for (let modelo of modelos) {
         try {
             const response = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(userQuery)}`, {
-                params: {
-                    system: systemPrompt,
-                    model: modelo,
-                    seed: Math.floor(Math.random() * 1000)
-                },
+                params: { system: systemPrompt, model: modelo, seed: Math.floor(Math.random() * 1000) },
                 timeout: 2200 
             });
             if (response.data) return response.data;
@@ -70,38 +78,38 @@ app.post("/webhook", async (req, res) => {
     const userQuery = queryResult.queryText;
 
     try {
-        // --- 1. DETECTAR INTENT DE REINICIO ---
         if (intentName === "9 PasoNuevoPedido" || userQuery.toLowerCase() === "reiniciar") {
-            // Aquí puedes limpiar variables si es necesario
+            // Lógica de reinicio si fuera necesaria
         }
 
-        // --- 2. DETECTAR INTENT DE CONFIRMACIÓN FINAL (6.1 o 7.1) ---
         if (intentName === "6.1 PasoFinalSi" || intentName === "7.1 PasoEncuestaSi") {
-            console.log("✅ Paso Final detectado. Registrando pedido...");
+            console.log("✅ Paso Final detectado. Calculando y registrando...");
 
-            // Registramos en Google Sheets
+            // Calculamos el precio según la elección del usuario
+            const productoFinal = params.producto || "Maleta";
+            const tamanoFinal = params.tamano || "Mediana";
+            const precioCalculado = calcularPrecio(productoFinal, tamanoFinal);
+
             await registrarEnSheets({
                 session: sessionID,
-                producto: params.producto || "Maleta",
-                tamano: params.tamano || "Grande",
+                producto: productoFinal,
+                tamano: tamanoFinal,
                 color: params.color || "Gris",
-                precio: "$1,500 MXN"
+                precio: precioCalculado,
+                usuario: params.person ? params.person.name : "Cliente"
             });
 
-            // RESPUESTA FIJA DE ÉXITO (Para no confundir al usuario)
             return res.json({ 
-                fulfillmentText: `¡Pedido confirmado con éxito, Rosa! 🥳 Tu ${params.producto} ${params.tamano} color ${params.color} ya está en proceso de envío. ¿Te gustaría ayudarnos con una breve encuesta de satisfacción?` 
+                fulfillmentText: `¡Pedido confirmado con éxito! 🥳 Tu ${productoFinal} ${tamanoFinal} color ${params.color || 'Gris'} ya está en proceso. El total es de ${precioCalculado}. ¿Te gustaría ayudarnos con una breve encuesta?` 
             });
         }
 
-        // --- 3. PARA EL RESTO DE INTENTS, USAMOS LA IA ---
         const respuestaIA = await generarRespuestaCreativa(userQuery, intentName);
         return res.json({ fulfillmentText: respuestaIA });
 
     } catch (err) {
         console.error("Error en el flujo:", err.message);
-        // Respuesta de respaldo si todo falla
-        res.json({ fulfillmentText: "¡Recibido! Tu pedido está siendo procesado por nuestro equipo de bodega. 🧳" });
+        res.json({ fulfillmentText: "¡Recibido! Tu pedido ya está en bodega. 🧳" });
     }
 });
 
@@ -109,7 +117,3 @@ app.get("/", (req, res) => res.send("Servidor Venta de Equipaje Activo"));
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 Puerto: ${PORT}`));
-
-
-
-
