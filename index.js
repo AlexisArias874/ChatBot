@@ -42,16 +42,15 @@ async function registrarEnSheets(datos) {
     try {
         await doc.loadInfo();
         const sheet = doc.sheetsByIndex[0];
-        await sheet.addRow({
+ await sheet.addRow({
             "ID_Pedido": datos.id,
-            Fecha: new Date().toLocaleString(),
-            Sesion: datos.session,
-            Usuario: datos.usuario,
-            Producto: datos.producto,
-            "Tamaño": datos.tamano, // Se usa la Ñ con comillas para el encabezado de Excel
-            Color: datos.color,
-            Precio: datos.precio,
-            Estado: "Pendiente"
+            "Fecha": new Date().toLocaleString(),
+            "Usuario": datos.usuario,
+            "Producto": datos.producto,
+            "Tamaño": datos.tamano,
+            "Color": datos.color,
+            "Precio": datos.precio,
+            "Estado": "Pendiente"
         });
         console.log("✅ Pedido guardado en Sheets ID:", datos.id);
     } catch (e) { console.error("❌ Error Sheets:", e.message); }
@@ -138,3 +137,4 @@ app.get("/", (req, res) => res.send("Servidor Venta de Equipaje ONLINE"));
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 Corriendo en puerto: ${PORT}`));
+
