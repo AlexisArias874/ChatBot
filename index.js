@@ -44,7 +44,7 @@ async function registrarEnSheets(datos) {
         const sheet = doc.sheetsByIndex[0];
  await sheet.addRow({
             "ID_Pedido": datos.id,
-            "Fecha": new Date().toLocaleString(),
+            "Fecha": new Date(),
             "Usuario": datos.usuario,
             "Producto": datos.producto,
             "Tamaño": datos.tamano,
@@ -137,4 +137,5 @@ app.get("/", (req, res) => res.send("Servidor Venta de Equipaje ONLINE"));
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 Corriendo en puerto: ${PORT}`));
+
 
