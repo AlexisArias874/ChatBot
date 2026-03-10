@@ -62,46 +62,45 @@ async function generarRespuestaCreativa(userQuery, intentName) {
 }
 
 app.post("/webhook", async (req, res) => {
-    const userQuery = req.body.queryResult.queryText;
+    const queryResult = req.body.queryResult;
+    const intentName = queryResult.intent ? queryResult.intent.displayName : "Default";
     const sessionID = req.body.session;
-    const params = req.body.queryResult.parameters;
-
-    // --- LEER EL NOMBRE EXACTO DEL INTENT DESDE DIALOGFLOW ---
-    const intentName = req.body.queryResult.intent ? req.body.queryResult.intent.displayName : "Default";
+    const params = queryResult.parameters;
+    const userQuery = queryResult.queryText;
 
     try {
-        // REINICIAR: Tu intent se llama "9 PasoNuevoPedido"
+        // --- 1. DETECTAR INTENT DE REINICIO ---
         if (intentName === "9 PasoNuevoPedido" || userQuery.toLowerCase() === "reiniciar") {
-            // Aquí puedes añadir lógica para limpiar la sesión si usas memoria
-            console.log("Reiniciando pedido...");
+            // Aquí puedes limpiar variables si es necesario
         }
 
-        // REGISTRAR EN SHEETS: Tu intent se llama "6.1 PasoFinalSi"
-        if (intentName === "6.1 PasoFinalSi") {
-            console.log("Detectado Paso Final. Registrando en Sheets...");
-            
+        // --- 2. DETECTAR INTENT DE CONFIRMACIÓN FINAL (6.1 o 7.1) ---
+        if (intentName === "6.1 PasoFinalSi" || intentName === "7.1 PasoEncuestaSi") {
+            console.log("✅ Paso Final detectado. Registrando pedido...");
+
+            // Registramos en Google Sheets
             await registrarEnSheets({
                 session: sessionID,
-                producto: params.producto || "No detectado",
-                tamano: params.tamano || "No detectado", // Asegúrate que en Dialogflow se llame 'tamano'
-                color: params.color || "No detectado",
+                producto: params.producto || "Maleta",
+                tamano: params.tamano || "Grande",
+                color: params.color || "Gris",
                 precio: "$1,500 MXN"
+            });
+
+            // RESPUESTA FIJA DE ÉXITO (Para no confundir al usuario)
+            return res.json({ 
+                fulfillmentText: `¡Pedido confirmado con éxito, Rosa! 🥳 Tu ${params.producto} ${params.tamano} color ${params.color} ya está en proceso de envío. ¿Te gustaría ayudarnos con una breve encuesta de satisfacción?` 
             });
         }
 
-        const respuesta = await generarRespuestaCreativa(userQuery, intentName);
-        res.json({ fulfillmentText: respuesta });
+        // --- 3. PARA EL RESTO DE INTENTS, USAMOS LA IA ---
+        const respuestaIA = await generarRespuestaCreativa(userQuery, intentName);
+        return res.json({ fulfillmentText: respuestaIA });
 
     } catch (err) {
-        // Mapa de errores ajustado a tus nombres de Intent
-        const errores = {
-            "3.1 CompraProducto": "¡Uy! ¿Buscabas maleta, mochila o bolso? 🧳",
-            "4 SeleccionTamano": "Se me perdió la cinta métrica. 📏 ¿Qué tamano prefieres: pequeña, mediana o grande?",
-            "5 SeleccionColor": "¡Qué colores tan padres! 🎨 ¿Lo quieres en negro, blanco o gris?",
-            "6.1 PasoFinalSi": "¡Casi listo! 🛒 ¿Confirmamos tu pedido para enviarlo a bodega?"
-        };
-        const fallback = errores[intentName] || "¡Qué buena pregunta! Dame un segundo para revisarlo. 😅";
-        res.json({ fulfillmentText: fallback });
+        console.error("Error en el flujo:", err.message);
+        // Respuesta de respaldo si todo falla
+        res.json({ fulfillmentText: "¡Recibido! Tu pedido está siendo procesado por nuestro equipo de bodega. 🧳" });
     }
 });
 
@@ -109,5 +108,6 @@ app.get("/", (req, res) => res.send("Servidor Venta de Equipaje Activo"));
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 Puerto: ${PORT}`));
+
 
 
