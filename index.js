@@ -63,40 +63,44 @@ async function generarRespuestaCreativa(userQuery, intentName) {
 
 app.post("/webhook", async (req, res) => {
     const userQuery = req.body.queryResult.queryText;
-    const intentName = req.body.queryResult.intent ? req.body.queryResult.intent.displayName : "Default";
     const sessionID = req.body.session;
     const params = req.body.queryResult.parameters;
 
+    // --- LEER EL NOMBRE EXACTO DEL INTENT DESDE DIALOGFLOW ---
+    const intentName = req.body.queryResult.intent ? req.body.queryResult.intent.displayName : "Default";
+
     try {
-        // LÓGICA DE REGISTRO: Si el intent es de confirmación
+        // REINICIAR: Tu intent se llama "9 PasoNuevoPedido"
+        if (intentName === "9 PasoNuevoPedido" || userQuery.toLowerCase() === "reiniciar") {
+            // Aquí puedes añadir lógica para limpiar la sesión si usas memoria
+            console.log("Reiniciando pedido...");
+        }
 
-console.log("Intent detectado:", intentName); // Esto te dirá en los logs si entró al intent correcto
-
+        // REGISTRAR EN SHEETS: Tu intent se llama "6.1 PasoFinalSi"
         if (intentName === "6.1 PasoFinalSi") {
-    console.log("Intent ConfirmarPedido detectado, iniciando registro en Sheets...");
-    console.log("Parámetros recibidos:", params); // Esto te dirá si viajan los datos
-    
-    await registrarEnSheets({
-        session: sessionID,
-        producto: params.producto || "Indefinido",
-        tamano: params.tamano || "Indefinido",
-        color: params.color || "Indefinido",
-        precio: "$1,500 MXN"
-    });
-}
+            console.log("Detectado Paso Final. Registrando en Sheets...");
+            
+            await registrarEnSheets({
+                session: sessionID,
+                producto: params.producto || "No detectado",
+                tamano: params.tamano || "No detectado", // Asegúrate que en Dialogflow se llame 'tamano'
+                color: params.color || "No detectado",
+                precio: "$1,500 MXN"
+            });
+        }
 
         const respuesta = await generarRespuestaCreativa(userQuery, intentName);
         res.json({ fulfillmentText: respuesta });
 
     } catch (err) {
-        // MAPA DE ERRORES DINÁMICOS (UX mejorada)
+        // Mapa de errores ajustado a tus nombres de Intent
         const errores = {
-            "ElegirProducto": "¡Uy! Se me trabó la maleta. 🧳 ¿Buscabas mochila, maleta o bolso?",
-            "ElegirTamano": "Se me perdió la cinta métrica. 📏 ¿Qué tamano prefieres: pequeña, mediana o grande?",
-            "ElegirColor": "¡Qué colores tan padres! 🎨 ¿Lo quieres en negro, blanco o gris?",
-            "ConfirmarPedido": "¡Casi listo! 🛒 Hubo un error al procesar, ¿confirmamos tu pedido de nuevo?"
+            "3.1 CompraProducto": "¡Uy! ¿Buscabas maleta, mochila o bolso? 🧳",
+            "4 SeleccionTamano": "Se me perdió la cinta métrica. 📏 ¿Qué tamano prefieres: pequeña, mediana o grande?",
+            "5 SeleccionColor": "¡Qué colores tan padres! 🎨 ¿Lo quieres en negro, blanco o gris?",
+            "6.1 PasoFinalSi": "¡Casi listo! 🛒 ¿Confirmamos tu pedido para enviarlo a bodega?"
         };
-        const fallback = errores[intentName] || "¡Qué buena pregunta! Dame un segundo para revisarlo en bodega. 😅";
+        const fallback = errores[intentName] || "¡Qué buena pregunta! Dame un segundo para revisarlo. 😅";
         res.json({ fulfillmentText: fallback });
     }
 });
@@ -105,4 +109,5 @@ app.get("/", (req, res) => res.send("Servidor Venta de Equipaje Activo"));
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 Puerto: ${PORT}`));
+
 
