@@ -33,27 +33,28 @@ const doc = new GoogleSpreadsheet(process.env.GOOGLE_SHEET_ID, serviceAccountAut
 async function registrarEnSheets(d) {
     try {
         await doc.loadInfo();
-        await doc.sheetsByIndex[0].addRow({
+        const sheet = doc.sheetsByIndex[0];
+        await sheet.addRow({
             "ID_Pedido": d.id,
             "Fecha": new Date().toLocaleString(),
             "Usuario": d.usuario,
             "Producto": d.producto,
-            "Tamaño": d.tamano, // Usando la Ñ para coincidir con el Excel
+            "Tamaño": d.tamano, 
             "Color": d.color,
             "Precio": d.precio,
             "Estado": "Pendiente"
         });
-        console.log("✅ Pedido guardado en Sheets:", d.id);
+        console.log("✅ Registro exitoso en Sheets ID:", d.id);
     } catch (e) { console.error("❌ Error Sheets:", e.message); }
 }
 
 // --- 4. LÓGICA DE IA CREATIVA (POLLINATIONS) ---
 async function generarRespuestaIA(query) {
-    const systemPrompt = "Vendedor experto de 'Venta de Equipaje'. Vendes Mochila, Maleta, Bolso. Colores: Negra, Blanca, Gris. Tamaños: Pequeña, Mediana, Grande. Sé breve y cierra con pregunta.";
+    const systemPrompt = "Vendedor experto de 'Venta de Equipaje'. Solo Mochila, Maleta, Bolso. Sé breve, creativo y cierra con pregunta.";
     try {
         const resp = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(query)}`, {
             params: { system: systemPrompt, model: "mistral", seed: Math.floor(Math.random() * 1000) },
-            timeout: 2300 
+            timeout: 2400 
         });
         return resp.data;
     } catch (e) { return "¡Excelente elección! 🧳 ¿Te gustaría confirmar el pedido?"; }
@@ -65,7 +66,7 @@ app.post("/webhook", async (req, res) => {
     const intentName = queryResult.intent?.displayName;
     const userQuery = queryResult.queryText;
 
-    // --- FUNCIÓN PARA EXTRAER PARÁMETROS DE LA MEMORIA (CONTEXTOS) ---
+    // Función para extraer datos de la memoria (Contextos)
     const getDato = (nombre) => {
         let v = queryResult.parameters[nombre];
         if (!v && queryResult.outputContexts) {
@@ -75,27 +76,26 @@ app.post("/webhook", async (req, res) => {
                 }
             }
         }
-        if (v && typeof v === 'object' && v.name) v = v.name; // Para sys.person
+        if (v && typeof v === 'object' && v.name) v = v.name; 
         return v || null;
     };
 
     try {
-        // --- REINICIAR CONTEXTOS (INTENT 9) ---
+        // --- REINICIAR PROCESO (INTENT 9) ---
         if (intentName === "9 PasoNuevoPedido" || userQuery.toLowerCase() === "reiniciar") {
-            const contextos = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta"];
+            const ctxs = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta"];
             return res.json({
-                fulfillmentText: "🧹 He borrado tu selección. ¡Empecemos de nuevo! ¿Qué buscas hoy: mochila, maleta o bolso?",
-                outputContexts: contextos.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }))
+                fulfillmentText: "🧹 Memoria limpia. ¿Qué buscas ahora: mochila, maleta o bolso?",
+                outputContexts: ctxs.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }))
             });
         }
 
-        // Obtener datos reales de la conversación
         const usuario = getDato("usuario") || "Cliente";
         const producto = getDato("producto");
         const tamano = getDato("tamano");
         const color = getDato("color");
 
-        // --- PRE-CONFIRMACIÓN CON PRECIO (INTENT 5) ---
+        // --- PRE-CONFIRMACIÓN (MUESTRA PRECIO) ---
         if (intentName === "5 SeleccionColor") {
             const precio = calcularPrecio(producto, tamano);
             return res.json({ 
@@ -103,24 +103,56 @@ app.post("/webhook", async (req, res) => {
             });
         }
 
-        // --- REGISTRO FINAL (INTENT 6.1 O 7.1) ---
-        if (intentName === "6.1 PasoFinalSi" || intentName === "7.1 PasoEncuestaSi") {
+        // --- REGISTRO ÚNICO DE PEDIDO (INTENT 6.1) ---
+        if (intentName === "6.1 PasoFinalSi") {
             const id = generarID();
             const precio = calcularPrecio(producto, tamano);
+            
+            // REGISTRO EN SHEETS (Solo ocurre aquí)
             await registrarEnSheets({ id, usuario, producto, tamano, color, precio });
 
-            return res.json({ 
-                fulfillmentText: `¡Listo, ${usuario}! 🎉 Tu pedido ha sido registrado con el ID: ${id}. Tu ${producto} llegará pronto. ¿Te gustaría responder una breve encuesta?` 
+            const resumen = `¡Listo, ${usuario}! 🎉 Tu pedido ha sido registrado.\n\n` +
+                            `📄 DETALLES:\n🆔 ID: ${id}\n🎒 Objeto: ${producto}\n📏 Tamaño: ${tamano}\n🎨 Color: ${color}\n💰 Precio: ${precio}\n\n` +
+                            `¿Te gustaría responder una breve encuesta de satisfacción?`;
+
+            return res.json({
+                fulfillmentMessages: [
+                    { "text": { "text": [resumen] } },
+                    {
+                        "payload": {
+                            "facebook": {
+                                "attachment": {
+                                    "type": "template",
+                                    "payload": {
+                                        "template_type": "button",
+                                        "text": "Selecciona una opción:",
+                                        "buttons": [
+                                            { "type": "postback", "title": "Sí", "payload": "Si" },
+                                            { "type": "postback", "title": "No", "payload": "No" }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                ]
             });
         }
 
-        // --- IA PARA OTROS INTENTS ---
+        // --- RESPUESTA DE ENCUESTA (SIN REGISTRO EN SHEETS) ---
+        if (intentName === "7.1 PasoEncuestaSi") {
+            return res.json({ 
+                fulfillmentText: "¡Genial! ⭐ ¿Cómo calificarías tu experiencia con nuestro chat automatizado?" 
+            });
+        }
+
+        // --- IA PARA EL RESTO DE CONSULTAS ---
         const respuesta = await generarRespuestaIA(userQuery);
         res.json({ fulfillmentText: respuesta });
 
     } catch (err) {
         console.error("Error Webhook:", err.message);
-        res.json({ fulfillmentText: "¡Qué buena elección! 🧳 ¿Confirmamos tu pedido de equipaje?" });
+        res.json({ fulfillmentText: "¡Excelente! ¿Confirmamos el pedido? 🧳" });
     }
 });
 
