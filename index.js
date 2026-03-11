@@ -103,7 +103,9 @@ app.post("/webhook", async (req, res) => {
             });
 
             return res.json({ 
-                fulfillmentText: `¡Listo, ${usuarioFinal}! Tu pedido ha sido registrado. Tu ${productoFinal} ${tamanoFinal} color ${colorFinal} está en camino. El total fue ${precio}. 🚀` 
+                fulfillmentText: `¡Listo, ${usuarioFinal}! Tu pedido ha sido registrado. Tu ${productoFinal} ${tamanoFinal} color ${colorFinal} está en camino. El total fue ${precio}. 🚀
+                
+                ¿Quieres hacer una encuesta de satisfacción?` 
             });
         }
 
@@ -121,3 +123,4 @@ app.post("/webhook", async (req, res) => {
 });
 
 app.listen(process.env.PORT || 10000);
+
