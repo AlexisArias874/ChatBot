@@ -19,10 +19,9 @@ const calcularPrecio = (p, t) => {
     return (PRECIOS[prod] && PRECIOS[prod][tam]) ? `${PRECIOS[prod][tam]} MXN` : "$1,500 MXN";
 };
 
-// --- 2. GENERADOR DE ID ÚNICO ---
 const generarID = () => `VE-${Date.now().toString().slice(-6)}-${Math.floor(1000 + Math.random() * 9000)}`;
 
-// --- 3. CONFIGURACIÓN GOOGLE SHEETS ---
+// --- 2. CONFIGURACIÓN GOOGLE SHEETS ---
 const serviceAccountAuth = new JWT({
     email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
     key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
@@ -33,39 +32,40 @@ const doc = new GoogleSpreadsheet(process.env.GOOGLE_SHEET_ID, serviceAccountAut
 async function registrarEnSheets(d) {
     try {
         await doc.loadInfo();
-        const sheet = doc.sheetsByIndex[0];
-        await sheet.addRow({
-            "ID_Pedido": d.id,
-            "Fecha": new Date().toLocaleString(),
-            "Usuario": d.usuario,
-            "Producto": d.producto,
-            "Tamaño": d.tamano, 
-            "Color": d.color,
-            "Precio": d.precio,
-            "Estado": "Pendiente"
+        await doc.sheetsByIndex[0].addRow({
+            "ID_Pedido": d.id, "Fecha": new Date().toLocaleString(), "Usuario": d.usuario,
+            "Producto": d.producto, "Tamaño": d.tamano, "Color": d.color, "Precio": d.precio, "Estado": "Pendiente"
         });
     } catch (e) { console.error("❌ Error Sheets:", e.message); }
 }
 
-// --- 4. LÓGICA DE IA (POLLINATIONS) ---
-async function generarRespuestaIA(query, esDespedida = false, nombre = "Cliente") {
-    // Si es despedida, le damos una instrucción especial a la IA
-    const systemPrompt = esDespedida 
-        ? `Eres un vendedor de maletas amable. El cliente ${nombre} ya terminó. Dile que para un nuevo pedido debe escribir 'Hola' para empezar de nuevo. ¡OBLIGATORIO: Incluye un chiste corto sobre maletas o viajes! Sé muy creativo y despídete.`
-        : "Vendedor de maletas experto. Sé breve y cierra con pregunta.";
+// --- 3. LÓGICA DE IA CON PERSONALIDAD ---
+async function generarRespuestaIA(query, modo, nombre = "Cliente") {
+    let systemPrompt = "";
+    
+    if (modo === "despedida") {
+        systemPrompt = `Eres un vendedor de maletas carismático. El cliente ${nombre} ha terminado su interacción. 
+        INSTRUCCIONES: 
+        1. Despídete amablemente. 
+        2. Dile claramente que para un nuevo pedido debe escribir 'Hola' para reiniciar. 
+        3. ¡OBLIGATORIO! Cuenta un chiste corto y original relacionado con maletas, viajes o aeropuertos. 
+        4. Sé creativo y usa emojis.`;
+    } else {
+        systemPrompt = "Eres un vendedor experto de maletas. Sé breve, amable y ayuda al cliente.";
+    }
 
     try {
         const resp = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(query)}`, {
             params: { system: systemPrompt, model: "mistral", seed: Math.floor(Math.random() * 1000) },
-            timeout: 2500 
+            timeout: 3000 
         });
         return resp.data;
     } catch (e) { 
-        return `¡Gracias por visitarnos, ${nombre}! Escribe 'Hola' si quieres iniciar un nuevo pedido. 🧳`; 
+        return `¡Gracias por todo, ${nombre}! Si quieres comprar otra cosa, solo escribe 'Hola' y ahí estaré. 🧳`; 
     }
 }
 
-// --- 5. WEBHOOK PRINCIPAL ---
+// --- 4. WEBHOOK PRINCIPAL ---
 app.post("/webhook", async (req, res) => {
     const { queryResult, session } = req.body;
     const intentName = queryResult.intent ? queryResult.intent.displayName : "Default";
@@ -87,27 +87,25 @@ app.post("/webhook", async (req, res) => {
     try {
         const usuario = getDato("usuario") || "Cliente";
 
-        // --- 9 REINICIO / NUEVO PEDIDO ---
+        // REINICIO MANUAL
         if (intentName === "9 PasoNuevoPedido" || userQuery.toLowerCase() === "reiniciar") {
-            const ctxs = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "pasoencuestasi"];
+            const ctxs = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta"];
             return res.json({
-                fulfillmentText: "🧹 Memoria limpia. ¿Qué buscas ahora: mochila, maleta o bolso?",
+                fulfillmentText: "🧹 ¡Cero kilómetros! ¿Qué buscas hoy: mochila, maleta o bolso?",
                 outputContexts: ctxs.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }))
             });
         }
 
-        // --- 6.1 REGISTRO Y CIERRE ---
+        // REGISTRO DE PEDIDO (Paso 6.1)
         if (intentName === "6.1 PasoFinalSi") {
             const id = generarID();
-            const prod = getDato("producto") || "Maleta";
-            const tam = getDato("tamano") || "Mediana";
-            const col = getDato("color") || "Gris";
+            const prod = getDato("producto");
+            const tam = getDato("tamano");
             const precio = calcularPrecio(prod, tam);
-            
-            await registrarEnSheets({ id, usuario, producto: prod, tamano: tam, color: col, precio });
+            await registrarEnSheets({ id, usuario, producto: prod, tamano: tam, color: getDato("color"), precio });
 
             const resumen = `¡Listo, ${usuario}! 🎉 Pedido registrado.\n\n🆔 ID: ${id}\n🎒 Objeto: ${prod}\n📏 Tamaño: ${tam}\n💰 Precio: ${precio}\n\n¿Te gustaría responder una breve encuesta de satisfacción?`;
-
+            
             const ctxsBorrar = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal"];
             const outCtxs = ctxsBorrar.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }));
             outCtxs.push({ name: `${session}/contexts/PasoEncuesta`, lifespanCount: 1 });
@@ -121,13 +119,15 @@ app.post("/webhook", async (req, res) => {
             });
         }
 
-        // --- 7.2 NO A LA ENCUESTA O 8 DESPEDIDA (USANDO IA) ---
+        // PREGUNTA DE ENCUESTA (Paso 7.1)
+        if (intentName === "7.1 PasoEncuestaSi") {
+            return res.json({ fulfillmentText: `¡Genial, ${usuario}! ⭐ ¿Cómo calificarías tu experiencia con nuestro chat? (Mala, Regular, Buena, Excelente)` });
+        }
+
+        // CIERRE CON IA Y CHISTE (Paso 7.2 o 8)
         if (intentName === "7.2 PasoEncuestaNo" || intentName === "8 PasoDespedida") {
-            // Llamamos a la IA con el "Modo Despedida" activado
-            const despedidaIA = await generarRespuestaIA(userQuery, true, usuario);
-            
-            // Borramos TODOS los contextos para forzar el reinicio con "Hola"
-            const ctxsFinales = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "PasoEncuesta", "pasoencuestasi"];
+            const despedidaIA = await generarRespuestaIA("Haz una despedida con chiste de maletas", "despedida", usuario);
+            const ctxsFinales = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "PasoEncuesta"];
             
             return res.json({
                 fulfillmentText: despedidaIA,
@@ -135,12 +135,12 @@ app.post("/webhook", async (req, res) => {
             });
         }
 
-        // IA para otros mensajes (y paso 5 precio / 7.1 encuesta)
-        const respuesta = await generarRespuestaIA(userQuery, false, usuario);
+        // IA PARA PRECIO Y OTROS
+        const respuesta = await generarRespuestaIA(userQuery, "normal", usuario);
         return res.json({ fulfillmentText: respuesta });
 
     } catch (err) {
-        return res.json({ fulfillmentText: "¡Excelente! ¿Confirmamos el pedido? 🧳" });
+        return res.json({ fulfillmentText: "¡Excelente elección! ¿Confirmamos el pedido? 🧳" });
     }
 });
 
