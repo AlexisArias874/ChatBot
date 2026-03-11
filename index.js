@@ -61,7 +61,7 @@ async function generarRespuestaIA(query, modo, nombre = "Cliente") {
         });
         return resp.data;
     } catch (e) { 
-        return `¡Gracias por todo, ${nombre}! Si quieres comprar otra cosa, solo escribe 'Hola' y ahí estaré. 🧳`; 
+        return `¡Gracias por tu compra! Si quieres comprar otra cosa, solo escribe 'Hola' y ahí estaré. 🧳`; 
     }
 }
 
@@ -146,3 +146,4 @@ app.post("/webhook", async (req, res) => {
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 Puerto: ${PORT}`));
+
