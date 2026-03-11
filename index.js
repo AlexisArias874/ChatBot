@@ -66,7 +66,7 @@ app.post("/webhook", async (req, res) => {
     const intentName = queryResult.intent?.displayName;
     const userQuery = queryResult.queryText;
 
-    // Función para extraer datos de la memoria (Contextos)
+    // Función para rescatar datos de la memoria (Contextos)
     const getDato = (nombre) => {
         let v = queryResult.parameters[nombre];
         if (!v && queryResult.outputContexts) {
@@ -95,7 +95,7 @@ app.post("/webhook", async (req, res) => {
         const tamano = getDato("tamano");
         const color = getDato("color");
 
-        // --- PRE-CONFIRMACIÓN (MUESTRA PRECIO) ---
+        // --- PRE-CONFIRMACIÓN (MUESTRA PRECIO - INTENT 5) ---
         if (intentName === "5 SeleccionColor") {
             const precio = calcularPrecio(producto, tamano);
             return res.json({ 
@@ -103,17 +103,23 @@ app.post("/webhook", async (req, res) => {
             });
         }
 
-        // --- REGISTRO ÚNICO DE PEDIDO (INTENT 6.1) ---
+        // --- REGISTRO ÚNICO Y LIMPIEZA DE CONTEXTOS (INTENT 6.1) ---
         if (intentName === "6.1 PasoFinalSi") {
             const id = generarID();
             const precio = calcularPrecio(producto, tamano);
             
-            // REGISTRO EN SHEETS (Solo ocurre aquí)
             await registrarEnSheets({ id, usuario, producto, tamano, color, precio });
 
             const resumen = `¡Listo, ${usuario}! 🎉 Tu pedido ha sido registrado.\n\n` +
                             `📄 DETALLES:\n🆔 ID: ${id}\n🎒 Objeto: ${producto}\n📏 Tamaño: ${tamano}\n🎨 Color: ${color}\n💰 Precio: ${precio}\n\n` +
                             `¿Te gustaría responder una breve encuesta de satisfacción?`;
+
+            // --- ESTO ROMPE EL BUCLE: Borramos la memoria de compra y activamos encuesta ---
+            const ctxsBorrar = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal"];
+            const outputContexts = ctxsBorrar.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }));
+            
+            // Forzamos el contexto de encuesta para que el siguiente "Si" sea el correcto
+            outputContexts.push({ name: `${session}/contexts/PasoEncuesta`, lifespanCount: 1 });
 
             return res.json({
                 fulfillmentMessages: [
@@ -135,20 +141,21 @@ app.post("/webhook", async (req, res) => {
                             }
                         }
                     }
-                ]
+                ],
+                outputContexts: outputContexts
             });
         }
 
-        // --- RESPUESTA DE ENCUESTA (SIN REGISTRO EN SHEETS) ---
+        // --- RESPUESTA DE ENCUESTA (SIN REGISTRO - INTENT 7.1) ---
         if (intentName === "7.1 PasoEncuestaSi") {
             return res.json({ 
-                fulfillmentText: "¡Genial! ⭐ ¿Cómo calificarías tu experiencia con nuestro chat automatizado?" 
+                fulfillmentText: "¡Genial! ⭐ Cuéntanos, ¿cómo calificarías tu experiencia con nuestro chat automatizado?" 
             });
         }
 
         // --- IA PARA EL RESTO DE CONSULTAS ---
-        const respuesta = await generarRespuestaIA(userQuery);
-        res.json({ fulfillmentText: respuesta });
+        const respuestaIA = await generarRespuestaIA(userQuery);
+        res.json({ fulfillmentText: respuestaIA });
 
     } catch (err) {
         console.error("Error Webhook:", err.message);
@@ -157,4 +164,4 @@ app.post("/webhook", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 Puerto: ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Servidor Venta de Equipaje en puerto: ${PORT}`));
