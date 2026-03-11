@@ -6,7 +6,7 @@ const { GoogleSpreadsheet } = require('google-spreadsheet');
 const app = express();
 app.use(express.json({ limit: "2mb" }));
 
-// --- 1. MATRIZ DE PRECIOS EXACTA ---
+// --- 1. MATRIZ DE PRECIOS DINÁMICA ---
 const PRECIOS = {
     "Mochila": { "Pequeña": "$600", "Mediana": "$850", "Grande": "$1,100" },
     "Maleta": { "Pequeña": "$1,200", "Mediana": "$1,500", "Grande": "$2,000" },
@@ -14,13 +14,15 @@ const PRECIOS = {
 };
 
 const calcularPrecio = (p, t) => {
-    // Normalizamos para evitar errores de mayúsculas (p. ej: maleta -> Maleta)
     const prod = p ? p.charAt(0).toUpperCase() + p.slice(1).toLowerCase() : "";
     const tam = t ? t.charAt(0).toUpperCase() + t.slice(1).toLowerCase() : "";
     return (PRECIOS[prod] && PRECIOS[prod][tam]) ? `${PRECIOS[prod][tam]} MXN` : "$1,500 MXN";
 };
 
-// --- 2. CONFIGURACIÓN GOOGLE SHEETS ---
+// --- 2. GENERADOR DE ID ÚNICO ---
+const generarID = () => `VE-${Date.now().toString().slice(-6)}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+// --- 3. CONFIGURACIÓN GOOGLE SHEETS ---
 const serviceAccountAuth = new JWT({
     email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
     key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
@@ -32,95 +34,95 @@ async function registrarEnSheets(d) {
     try {
         await doc.loadInfo();
         await doc.sheetsByIndex[0].addRow({
-            "ID_Pedido": `VE-${Date.now().toString().slice(-6)}`,
+            "ID_Pedido": d.id,
             "Fecha": new Date().toLocaleString(),
             "Usuario": d.usuario,
             "Producto": d.producto,
-            "Tamaño": d.tamano,
+            "Tamaño": d.tamano, // Usando la Ñ para coincidir con el Excel
             "Color": d.color,
             "Precio": d.precio,
             "Estado": "Pendiente"
         });
-        console.log("✅ Fila escrita con éxito");
+        console.log("✅ Pedido guardado en Sheets:", d.id);
     } catch (e) { console.error("❌ Error Sheets:", e.message); }
 }
 
-// --- 3. WEBHOOK OPTIMIZADO ---
+// --- 4. LÓGICA DE IA CREATIVA (POLLINATIONS) ---
+async function generarRespuestaIA(query) {
+    const systemPrompt = "Vendedor experto de 'Venta de Equipaje'. Vendes Mochila, Maleta, Bolso. Colores: Negra, Blanca, Gris. Tamaños: Pequeña, Mediana, Grande. Sé breve y cierra con pregunta.";
+    try {
+        const resp = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(query)}`, {
+            params: { system: systemPrompt, model: "mistral", seed: Math.floor(Math.random() * 1000) },
+            timeout: 2300 
+        });
+        return resp.data;
+    } catch (e) { return "¡Excelente elección! 🧳 ¿Te gustaría confirmar el pedido?"; }
+}
+
+// --- 5. WEBHOOK PRINCIPAL ---
 app.post("/webhook", async (req, res) => {
     const { queryResult, session } = req.body;
     const intentName = queryResult.intent?.displayName;
-    const params = queryResult.parameters;
+    const userQuery = queryResult.queryText;
 
-    // --- CAZADOR DE ATRIBUTOS (Extrae lo que configuraste en tu imagen) ---
-    // Buscamos en 'parameters' y si no está, escaneamos los 'outputContexts'
-    const getAtributo = (nombre) => {
-        let v = params[nombre];
+    // --- FUNCIÓN PARA EXTRAER PARÁMETROS DE LA MEMORIA (CONTEXTOS) ---
+    const getDato = (nombre) => {
+        let v = queryResult.parameters[nombre];
         if (!v && queryResult.outputContexts) {
             for (const ctx of queryResult.outputContexts) {
                 if (ctx.parameters && ctx.parameters[nombre]) {
-                    v = ctx.parameters[nombre];
-                    break;
+                    v = ctx.parameters[nombre]; break;
                 }
             }
         }
-        // Si es un objeto de sistema (sys.person), sacamos el nombre
-        if (v && typeof v === 'object' && v.name) v = v.name;
+        if (v && typeof v === 'object' && v.name) v = v.name; // Para sys.person
         return v || null;
     };
 
-    // Obtenemos los valores REALES de tu tabla
-    const usuarioFinal = getAtributo("usuario") || "Cliente";
-    const productoFinal = getAtributo("producto");
-    const tamanoFinal = getAtributo("tamano");
-    const colorFinal = getAtributo("color");
-
     try {
-        // PASO 5: CÁLCULO Y MUESTRA DE PRECIO (5 SeleccionColor)
-        if (intentName === "5 SeleccionColor") {
-            const precio = calcularPrecio(productoFinal, tamanoFinal);
-            
-            // Si falta algún dato, forzamos una respuesta de ayuda
-            if (!productoFinal || !tamanoFinal) {
-                return res.json({ fulfillmentText: "¡Qué buena elección! Pero se me olvidó qué modelo buscabas. ¿Me repites si querías maleta, mochila o bolso? 🧳" });
-            }
-
-            return res.json({ 
-                fulfillmentText: `Perfecto ${usuarioFinal}, has seleccionado ${productoFinal} tamaño ${tamanoFinal} de color ${colorFinal}. El costo total será de ${precio}. ¿Quieres confirmar tu pedido?` 
+        // --- REINICIAR CONTEXTOS (INTENT 9) ---
+        if (intentName === "9 PasoNuevoPedido" || userQuery.toLowerCase() === "reiniciar") {
+            const contextos = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta"];
+            return res.json({
+                fulfillmentText: "🧹 He borrado tu selección. ¡Empecemos de nuevo! ¿Qué buscas hoy: mochila, maleta o bolso?",
+                outputContexts: contextos.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }))
             });
         }
 
-        // PASO 6.1: REGISTRO FINAL
-        if (intentName === "6.1 PasoFinalSi" || intentName === "7.1 PasoEncuestaSi") {
-            const precio = calcularPrecio(productoFinal, tamanoFinal);
-            
-            await registrarEnSheets({
-                usuario: usuarioFinal,
-                producto: productoFinal || "Maleta",
-                tamano: tamanoFinal || "Mediana",
-                color: colorFinal || "Gris",
-                precio: precio,
-                session: session
+        // Obtener datos reales de la conversación
+        const usuario = getDato("usuario") || "Cliente";
+        const producto = getDato("producto");
+        const tamano = getDato("tamano");
+        const color = getDato("color");
+
+        // --- PRE-CONFIRMACIÓN CON PRECIO (INTENT 5) ---
+        if (intentName === "5 SeleccionColor") {
+            const precio = calcularPrecio(producto, tamano);
+            return res.json({ 
+                fulfillmentText: `Perfecto ${usuario}, has seleccionado ${producto || 'un producto'} tamaño ${tamano || 'mediano'} de color ${color || 'gris'}. El costo total será de ${precio}. ¿Quieres confirmar tu pedido?` 
             });
+        }
+
+        // --- REGISTRO FINAL (INTENT 6.1 O 7.1) ---
+        if (intentName === "6.1 PasoFinalSi" || intentName === "7.1 PasoEncuestaSi") {
+            const id = generarID();
+            const precio = calcularPrecio(producto, tamano);
+            await registrarEnSheets({ id, usuario, producto, tamano, color, precio });
 
             return res.json({ 
-                fulfillmentText: `¡Listo, ${usuarioFinal}! Tu pedido ha sido registrado. Tu ${productoFinal} ${tamanoFinal} color ${colorFinal} está en camino. El total fue ${precio}. 🚀
-                
-                ¿Quieres hacer una encuesta de satisfacción?` 
+                fulfillmentText: `¡Listo, ${usuario}! 🎉 Tu pedido ha sido registrado con el ID: ${id}. Tu ${producto} llegará pronto. ¿Te gustaría responder una breve encuesta?` 
             });
         }
 
         // --- IA PARA OTROS INTENTS ---
-        const aiResp = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(queryResult.queryText)}`, {
-            params: { system: "Vendedor de maletas experto y breve.", model: "mistral" },
-            timeout: 2500
-        });
-        res.json({ fulfillmentText: aiResp.data });
+        const respuesta = await generarRespuestaIA(userQuery);
+        res.json({ fulfillmentText: respuesta });
 
     } catch (err) {
-        console.error("Error:", err.message);
-        res.json({ fulfillmentText: "¡Excelente! ¿Confirmamos tu pedido de equipaje? 🧳" });
+        console.error("Error Webhook:", err.message);
+        res.json({ fulfillmentText: "¡Qué buena elección! 🧳 ¿Confirmamos tu pedido de equipaje?" });
     }
 });
 
-app.listen(process.env.PORT || 10000);
-
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`🚀 Puerto: ${PORT}`));
