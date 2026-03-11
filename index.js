@@ -84,7 +84,7 @@ app.post("/webhook", async (req, res) => {
         if (intentName === "9 PasoNuevoPedido" || userQuery.toLowerCase() === "reiniciar") {
             const ctxs = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "pasoencuestasi"];
             return res.json({
-                fulfillmentText: "🧹 Memoria limpia. ¿Qué buscas ahora: mochila, maleta o bolso?",
+                fulfillmentText: "Memoria limpia. Escribe "Hola"",
                 outputContexts: ctxs.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }))
             });
         }
@@ -153,3 +153,4 @@ app.post("/webhook", async (req, res) => {
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 Servidor Venta de Equipaje Activo`));
+
