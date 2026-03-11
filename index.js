@@ -6,7 +6,7 @@ const { GoogleSpreadsheet } = require('google-spreadsheet');
 const app = express();
 app.use(express.json({ limit: "2mb" }));
 
-// --- 1. MATRIZ DE PRECIOS DINÁMICA ---
+// --- 1. MATRIZ DE PRECIOS ---
 const PRECIOS = {
     "Mochila": { "Pequeña": "$600", "Mediana": "$850", "Grande": "$1,100" },
     "Maleta": { "Pequeña": "$1,200", "Mediana": "$1,500", "Grande": "$2,000" },
@@ -44,20 +44,25 @@ async function registrarEnSheets(d) {
             "Precio": d.precio,
             "Estado": "Pendiente"
         });
-        console.log("✅ Registro exitoso ID:", d.id);
     } catch (e) { console.error("❌ Error Sheets:", e.message); }
 }
 
 // --- 4. LÓGICA DE IA (POLLINATIONS) ---
-async function generarRespuestaIA(query) {
-    const systemPrompt = "Vendedor de maletas experto. Sé breve y amable.";
+async function generarRespuestaIA(query, esDespedida = false, nombre = "Cliente") {
+    // Si es despedida, le damos una instrucción especial a la IA
+    const systemPrompt = esDespedida 
+        ? `Eres un vendedor de maletas amable. El cliente ${nombre} ya terminó. Dile que para un nuevo pedido debe escribir 'Hola' para empezar de nuevo. ¡OBLIGATORIO: Incluye un chiste corto sobre maletas o viajes! Sé muy creativo y despídete.`
+        : "Vendedor de maletas experto. Sé breve y cierra con pregunta.";
+
     try {
         const resp = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(query)}`, {
             params: { system: systemPrompt, model: "mistral", seed: Math.floor(Math.random() * 1000) },
-            timeout: 2400 
+            timeout: 2500 
         });
         return resp.data;
-    } catch (e) { return "¡Excelente elección! ¿Confirmamos el pedido? 🧳"; }
+    } catch (e) { 
+        return `¡Gracias por visitarnos, ${nombre}! Escribe 'Hola' si quieres iniciar un nuevo pedido. 🧳`; 
+    }
 }
 
 // --- 5. WEBHOOK PRINCIPAL ---
@@ -80,34 +85,23 @@ app.post("/webhook", async (req, res) => {
     };
 
     try {
-        // --- REINICIAR (INTENT 9) ---
+        const usuario = getDato("usuario") || "Cliente";
+
+        // --- 9 REINICIO / NUEVO PEDIDO ---
         if (intentName === "9 PasoNuevoPedido" || userQuery.toLowerCase() === "reiniciar") {
             const ctxs = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "pasoencuestasi"];
             return res.json({
-                fulfillmentText: "Memoria limpia. Escribe "Hola"",
+                fulfillmentText: "🧹 Memoria limpia. ¿Qué buscas ahora: mochila, maleta o bolso?",
                 outputContexts: ctxs.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }))
             });
         }
 
-        const usuario = getDato("usuario") || "Cliente";
-
-        // --- 5 SELECCIÓN COLOR / PRECIO ---
-        if (intentName === "5 SeleccionColor") {
-            const prod = getDato("producto");
-            const tam = getDato("tamano");
-            const col = getDato("color");
-            const precio = calcularPrecio(prod, tam);
-            return res.json({ 
-                fulfillmentText: `Perfecto ${usuario}, has seleccionado ${prod} tamaño ${tam} de color ${col}. El costo total será de ${precio}. ¿Quieres confirmar tu pedido?` 
-            });
-        }
-
-        // --- 6.1 REGISTRO DE PEDIDO ---
+        // --- 6.1 REGISTRO Y CIERRE ---
         if (intentName === "6.1 PasoFinalSi") {
             const id = generarID();
-            const prod = getDato("producto");
-            const tam = getDato("tamano");
-            const col = getDato("color");
+            const prod = getDato("producto") || "Maleta";
+            const tam = getDato("tamano") || "Mediana";
+            const col = getDato("color") || "Gris";
             const precio = calcularPrecio(prod, tam);
             
             await registrarEnSheets({ id, usuario, producto: prod, tamano: tam, color: col, precio });
@@ -127,23 +121,22 @@ app.post("/webhook", async (req, res) => {
             });
         }
 
-        // --- 7.1 RESPUESTA SI A ENCUESTA ---
-        if (intentName === "7.1 PasoEncuestaSi") {
-            return res.json({ fulfillmentText: "¡Genial! ⭐ ¿Cómo calificarías tu experiencia con nuestro chat?" });
-        }
-
-        // --- DESPEDIDA FINAL (7.2 O 8) ---
-        // Este bloque ahora maneja el "No" a la encuesta usando el nombre dinámico
+        // --- 7.2 NO A LA ENCUESTA O 8 DESPEDIDA (USANDO IA) ---
         if (intentName === "7.2 PasoEncuestaNo" || intentName === "8 PasoDespedida") {
-            const ctxsFinales = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "pasoencuestasi"];
+            // Llamamos a la IA con el "Modo Despedida" activado
+            const despedidaIA = await generarRespuestaIA(userQuery, true, usuario);
+            
+            // Borramos TODOS los contextos para forzar el reinicio con "Hola"
+            const ctxsFinales = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "PasoEncuesta", "pasoencuestasi"];
+            
             return res.json({
-                fulfillmentText: `¡Muchas gracias por tu tiempo, ${usuario}! 🙏 Esperamos verte de regreso pronto. ¡Que tengas un excelente viaje! ✈️ (Si necesitas algo más, solo escribe 'Hola')`,
+                fulfillmentText: despedidaIA,
                 outputContexts: ctxsFinales.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }))
             });
         }
 
-        // IA para otros mensajes
-        const respuesta = await generarRespuestaIA(userQuery);
+        // IA para otros mensajes (y paso 5 precio / 7.1 encuesta)
+        const respuesta = await generarRespuestaIA(userQuery, false, usuario);
         return res.json({ fulfillmentText: respuesta });
 
     } catch (err) {
@@ -152,5 +145,4 @@ app.post("/webhook", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 Servidor Venta de Equipaje Activo`));
-
+app.listen(PORT, () => console.log(`🚀 Puerto: ${PORT}`));
