@@ -1,18 +1,22 @@
 {
   "name": "bot-equipaje",
-  "version": "1.1.0",
-  "description": "Bot con IA robusta y Sheets",
+  "version": "2.0.0",
+  "description": "Chatbot de venta de equipaje con IA Pollinations y Google Sheets",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "nodemon index.js"
   },
   "engines": {
-    "node": "20.x"
+    "node": ">=18"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "axios": "^1.6.2",
-    "google-spreadsheet": "^4.1.1",
-    "google-auth-library": "^9.4.1"
+    "axios": "^1.7.2",
+    "express": "^4.19.2",
+    "google-auth-library": "^9.4.2",
+    "google-spreadsheet": "^4.1.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
   }
 }
