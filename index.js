@@ -9,7 +9,7 @@ app.use(express.json({ limit: "2mb" }));
 // ==============================
 // CONFIGURACIÓN GLOBAL
 // ==============================
-axios.defaults.timeout = 30000; // 30 segundos para dar tiempo a la IA
+axios.defaults.timeout = 30000; 
 
 const PRECIOS = {
     Mochila: { Pequeña: "$600", Mediana: "$850", Grande: "$1100" },
@@ -57,7 +57,6 @@ async function registrarEnSheets(data) {
             Precio: data.precio,
             Estado: "Pendiente"
         });
-        console.log("✅ Pedido guardado en Sheets");
     } catch (e) {
         console.error("❌ Error en Sheets:", e.message);
     }
@@ -70,11 +69,11 @@ async function generarRespuestaIA(query, modo, info = {}, intentos = 2) {
     const { nombre = "James", paso = "inicio", siguiente = "producto" } = info;
 
     const prompts = {
-        reinicio: `El cliente ${nombre} quiere reiniciar la compra. Confirma que borraste todo y pregúntale si busca mochila, maleta o bolso de forma muy amable.`,
-        despedida: `El cliente ${nombre} terminó. Despídete con humor de vendedor experto y dile que escriba 'Hola' si necesita algo más.`,
-        error: `El cliente dijo "${query}", lo cual no encaja con lo que pedimos. Como vendedor de TransportMex, responde a su comentario brevemente pero redirígelo a elegir el ${siguiente}.`,
-        encuesta: `El pedido de ${nombre} se registró con éxito. Pídele con mucho entusiasmo que califique su experiencia del 1 al 5.`,
-        flujo: `Eres un vendedor de equipaje. El cliente dice "${query}". Estamos en el paso de ${paso}. Ayúdalo y pregúntale por el ${siguiente}.`
+        reinicio: `El cliente ${nombre} quiere reiniciar. Confirma amablemente y pregunta si busca mochila, maleta o bolso.`,
+        despedida: `El cliente ${nombre} terminó. Despídete con humor y dile que escriba 'Hola' para volver.`,
+        error: `El cliente dijo "${query}". Como vendedor experto, responde brevemente y redirígelo a elegir el ${siguiente}.`,
+        encuesta: `El pedido de ${nombre} está listo. Invítalo con una sola frase muy entusiasta a responder una breve encuesta de satisfacción.`,
+        flujo: `Eres vendedor de equipaje. El cliente dice "${query}". Ayúdalo y pregúntale por el ${siguiente}.`
     };
 
     const systemPrompt = prompts[modo] || prompts.flujo;
@@ -89,14 +88,10 @@ async function generarRespuestaIA(query, modo, info = {}, intentos = 2) {
                 model: "mistral",
                 seed: Math.floor(Math.random() * 999)
             });
-
             const texto = typeof r.data === 'string' ? r.data : r.data.choices[0].message.content;
             return texto.trim();
         } catch (e) {
-            console.error(`⚠️ Intento ${i+1} de IA falló`);
-            if (i === intentos - 1) {
-                return `¡Perfecto ${nombre}! Sigamos adelante. Para tu pedido de ${paso}, ¿qué ${siguiente} prefieres?`;
-            }
+            if (i === intentos - 1) return "¿Deseas responder una encuesta de satisfacción?";
             await new Promise(res => setTimeout(res, 1000));
         }
     }
@@ -111,19 +106,17 @@ app.post("/webhook", async (req, res) => {
         const intentName = queryResult?.intent?.displayName || "Fallback";
         const userQuery = queryResult?.queryText || "";
 
-        // Extraer parámetros
         const getP = (n) => queryResult.parameters?.[n] || null;
         const usuario = getP("usuario") || "James";
         const producto = getP("producto");
         const tamano = getP("tamano");
         const color = getP("color");
 
-        // Definir contexto para la IA
         let paso = "inicio";
         let siguiente = "producto";
-        if (producto) { paso = "elección de tamaño"; siguiente = "tamaño"; }
-        if (tamano) { paso = "elección de color"; siguiente = "color"; }
-        if (color) { paso = "confirmación"; siguiente = "confirmación final"; }
+        if (producto) { paso = "tamaño"; siguiente = "tamaño"; }
+        if (tamano) { paso = "color"; siguiente = "color"; }
+        if (color) { paso = "confirmación"; siguiente = "confirmación"; }
 
         // 1. REINICIO
         if (userQuery.toLowerCase().includes("reinicio") || intentName.includes("reinicio")) {
@@ -131,32 +124,31 @@ app.post("/webhook", async (req, res) => {
             return res.json({ fulfillmentText: r, outputContexts: [] });
         }
 
-        // 2. REGISTRO FINAL (Solución al bucle)
+        // 2. REGISTRO FINAL (CON FORMATO DE PRECIO ANTERIOR)
         if (intentName.includes("PasoFinalSi")) {
             const id = generarID();
-            const prod = producto || "Mochila";
-            const tam = tamano || "Mediana";
-            const col = color || "Negro";
+            const prod = normalizar(producto || "Mochila");
+            const tam = normalizar(tamano || "Mediana");
             const precio = calcularPrecio(prod, tam);
 
-            await registrarEnSheets({ id, usuario, producto: prod, tamano: tam, color: col, precio });
+            await registrarEnSheets({ id, usuario, producto: prod, tamano: tam, color: color || "Gris", precio });
 
             const mensajeIA = await generarRespuestaIA(userQuery, "encuesta", { nombre: usuario });
 
+            // Formato exacto solicitado
             return res.json({
-                fulfillmentText: `🎉 *Pedido Registrado*\n\nID: ${id}\nProducto: ${prod} (${tam})\nPrecio: ${precio}\nColor: ${col}\n\n${mensajeIA}`
+                fulfillmentText: `🎉 Pedido registrado\n\nID: ${id}\nProducto: ${prod}\nTamaño: ${tam}\nPrecio: ${precio}\n\n${mensajeIA}`
             });
         }
 
-        // 3. DESPEDIDAS O ENCUESTA NEGATIVA
+        // 3. DESPEDIDAS
         if (intentName.includes("Despedida") || intentName.includes("EncuestaNo")) {
             const r = await generarRespuestaIA(userQuery, "despedida", { nombre: usuario });
             return res.json({ fulfillmentText: r });
         }
 
-        // 4. RESPUESTA DINÁMICA (Para Fallbacks y consultas random)
-        // Si el intent es un "Fallback" o no se reconoce, la IA toma el control 100%
-        const modoIA = (intentName === "Fallback" || intentName === "Default Fallback Intent") ? "error" : "flujo";
+        // 4. IA GENERAL / FALLBACK
+        const modoIA = (intentName.includes("Fallback")) ? "error" : "flujo";
         const respuestaIA = await generarRespuestaIA(userQuery, modoIA, {
             nombre: usuario,
             paso: paso,
@@ -166,17 +158,9 @@ app.post("/webhook", async (req, res) => {
         res.json({ fulfillmentText: respuestaIA });
 
     } catch (e) {
-        console.error("❌ Error Webhook:", e.message);
-        res.json({ 
-            fulfillmentText: "¡Hola! Soy tu asistente de TransportMex. ¿Buscas una mochila, maleta o bolso para tu viaje?" 
-        });
+        res.json({ fulfillmentText: "¡Excelente elección! ¿Confirmamos tu pedido?" });
     }
 });
 
-// ==============================
-// INICIO DEL SERVIDOR
-// ==============================
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-    console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 Bot activo en puerto ${PORT}`));
