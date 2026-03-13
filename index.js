@@ -117,7 +117,7 @@ app.post("/webhook", async (req, res) => {
             const precio = calcularPrecio(prod, tam);
             await registrarEnSheets({ id, usuario, producto: prod, tamano: tam, color: col, precio });
             
-            const resumen = `¡Listo, ${usuario}! 🎉 Pedido registrado ID: ${id}\n🎒: ${prod}\n📏: ${tam}\n💰: ${precio}\n\n¿Encuesta de satisfacción?`;
+            const resumen = `¡Listo, ${usuario}! 🎉 Pedido registrado ID: ${id}\n🎒: ${prod}\n📏: ${tam}\n💰: ${precio}\n\n¿Quieres realizar una encuesta de satisfacción?`;
             const borrar = ["iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal"];
             const outCtxs = borrar.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }));
             outCtxs.push({ name: `${session}/contexts/pasoencuesta`, lifespanCount: 1 });
@@ -150,3 +150,4 @@ app.post("/webhook", async (req, res) => {
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 Bot Maestro de Equipaje Activo`));
+
