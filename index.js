@@ -37,11 +37,11 @@ async function registrarEnSheets(d) {
             "ID_Pedido": d.id, "Fecha": new Date().toLocaleString(), "Usuario": d.usuario,
             "Producto": d.producto, "Tamaño": d.tamano, "Color": d.color, "Precio": d.precio, "Estado": "Pendiente"
         });
-        console.log("✅ [Sheets] Fila escrita con éxito.");
-    } catch (e) { console.error("❌ [Sheets] Error:", e.message); }
+        console.log("✅ [Sheets] Pedido registrado correctamente.");
+    } catch (e) { console.error("❌ [Sheets] Error de registro:", e.message); }
 }
 
-// --- 3. LÓGICA DE IA (OPENROUTER) CON LOGS ---
+// --- 3. LÓGICA DE IA (POLLINATIONS) CON LOGS ---
 async function generarRespuestaIA(query, modo, info = {}) {
     let systemPrompt = "";
     if (modo === "despedida") {
@@ -50,23 +50,23 @@ async function generarRespuestaIA(query, modo, info = {}) {
         systemPrompt = `Vendedor experto. Axel preguntó: "${query}". Responde breve con humor, cuenta un chiste de maletas y regrésalo a ${info.paso} pidiendo su ${info.siguienteDato}.`;
     }
 
-    console.log(`⏳ [IA] Intentando conectar con OpenRouter (Modelo: Gemini Free)...`);
+    console.log(`⏳ [IA] Conectando con Pollinations AI (Modelo: OpenAI)...`);
 
     try {
-        const response = await axios.post("https://openrouter.ai/api/v1/chat/completions", {
-            model: "google/gemini-2.0-flash-lite-preview-09-2025:free",
-            messages: [{ "role": "system", "content": systemPrompt }, { "role": "user", "content": query }]
-        }, {
-            headers: { "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`, "Content-Type": "application/json" },
-            timeout: 0 // TIEMPO INDEFINIDO: Esperará lo que la API tarde en responder
+        const response = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(query)}`, {
+            params: { 
+                system: systemPrompt, 
+                model: "openai", 
+                seed: Math.floor(Math.random() * 1000) 
+            },
+            timeout: 0 // TIEMPO INDEFINIDO
         });
 
-        console.log("✅ [IA] Conexión exitosa. Respuesta recibida.");
-        return response.data.choices[0].message.content;
+        console.log("✅ [IA] Respuesta de Pollinations recibida con éxito.");
+        return response.data;
 
     } catch (e) {
-        console.error("❌ [IA] Error de conexión con el servicio de IA:", e.message);
-        // Respuesta manual de emergencia si la conexión falla totalmente
+        console.error("❌ [IA] Fallo en el servicio Pollinations:", e.message);
         return `¡Vaya ${info.nombre}! Me distraje un segundo con las maletas. 😂 ¿Sabías que las maletas no van a la escuela? ¡Porque ya están llenas! Pero bueno, estábamos en ${info.paso}, ¿qué ${info.siguienteDato} prefieres?`;
     }
 }
@@ -92,22 +92,25 @@ app.post("/webhook", async (req, res) => {
         const enEncuesta = queryResult.outputContexts?.some(c => c.name.toLowerCase().includes("pasoencuesta"));
         const enCalificacion = queryResult.outputContexts?.some(c => c.name.toLowerCase().includes("esperandocalificacion"));
 
+        let p = "inicio", s = "producto";
+        if (getDato("producto")) { p = "tamaño"; s = "tamaño"; }
+        if (getDato("tamano")) { p = "color"; s = "color"; }
+
         // A) REINICIO
         if (intentName.includes("9") || userQuery.toLowerCase() === "reiniciar") {
             const borrar = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "esperandocalificacion"];
-            return res.json({ fulfillmentText: "🧹 ¡Borrón y cuenta nueva! Escribe 'Hola' para empezar de nuevo.", outputContexts: borrar.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 })) });
+            return res.json({ fulfillmentText: "🧹 ¡Borrón y cuenta nueva! Escribe 'Hola' para empezar.", outputContexts: borrar.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 })) });
         }
 
         // B) REGISTRO 6.1
         if (intentName.includes("6.1")) {
             const id = generarID();
-            const prod = getDato("producto") || "Maleta"; const tam = getDato("tamano") || "Mediana";
+            const prod = getDato("producto"); const tam = getDato("tamano");
             const precio = calcularPrecio(prod, tam);
-            await registrarEnSheets({ id, usuario, producto: prod, tamano: tam, color: getDato("color") || "Gris", precio });
+            await registrarEnSheets({ id, usuario, producto: prod, tamano: tam, color: getDato("color"), precio });
 
             const resumen = `¡Listo, ${usuario}! 🎉 Pedido ID: ${id}\n🎒: ${prod}\n📏: ${tam}\n💰: ${precio}\n\n¿Deseas responder una encuesta?`;
-            const borrar = ["iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal"];
-            const out = borrar.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }));
+            const out = ["iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal"].map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }));
             out.push({ name: `${session}/contexts/pasoencuesta`, lifespanCount: 1 });
 
             return res.json({
@@ -131,11 +134,7 @@ app.post("/webhook", async (req, res) => {
             return res.json({ fulfillmentText: resp, outputContexts: todos.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 })) });
         }
 
-        // E) IA INTERRUPCIONES
-        let p = "inicio", s = "producto";
-        if (getDato("producto")) { p = "el tamaño"; s = "tamaño"; }
-        if (getDato("tamano")) { p = "el color"; s = "color"; }
-        
+        // E) IA GENERAL
         const respIA = await generarRespuestaIA(userQuery, "interrupcion", { paso: p, siguienteDato: s, nombre: usuario });
         return res.json({ fulfillmentText: respIA });
 
@@ -143,4 +142,4 @@ app.post("/webhook", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 Servidor en puerto ${PORT} con monitoreo de IA activo`));
+app.listen(PORT, () => console.log(`🚀 Servidor con Pollinations AI activo en puerto ${PORT}`));
