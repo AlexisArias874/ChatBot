@@ -6,7 +6,7 @@ const { GoogleSpreadsheet } = require('google-spreadsheet');
 const app = express();
 app.use(express.json({ limit: "2mb" }));
 
-// --- 1. CONFIGURACIÓN DE NEGOCIO ---
+// --- 1. MATRIZ DE PRECIOS ---
 const PRECIOS = {
     "Mochila": { "Pequeña": "$600", "Mediana": "$850", "Grande": "$1,100" },
     "Maleta": { "Pequeña": "$1,200", "Mediana": "$1,500", "Grande": "$2,000" },
@@ -37,7 +37,6 @@ async function registrarEnSheets(d) {
             "ID_Pedido": d.id, "Fecha": new Date().toLocaleString(), "Usuario": d.usuario,
             "Producto": d.producto, "Tamaño": d.tamano, "Color": d.color, "Precio": d.precio, "Estado": "Pendiente"
         });
-        console.log("✅ Fila escrita en Sheets");
     } catch (e) { console.error("❌ Error Sheets:", e.message); }
 }
 
@@ -45,10 +44,9 @@ async function registrarEnSheets(d) {
 async function generarRespuestaIA(query, modo, info = {}) {
     let systemPrompt = "";
     if (modo === "despedida") {
-        systemPrompt = `Eres un vendedor amable. El cliente ${info.nombre} terminó. Agradece, cuenta un chiste corto de maletas y dile que escriba 'Hola' para volver.`;
+        systemPrompt = `Vendedor amable. El cliente ${info.nombre} terminó. Agradece, cuenta un chiste corto de maletas y dile que escriba 'Hola' para volver.`;
     } else {
-        systemPrompt = `Eres el vendedor estrella de 'Venta de Equipaje'. El usuario Axel se distrajo y preguntó: "${query}". 
-        RESPONDE: 1. Breve con humor. 2. Cuenta un chiste de maletas. 3. Regrésalo al paso de ${info.paso} pidiendo su ${info.siguienteDato}.`;
+        systemPrompt = `Vendedor de maletas. Axel se distrajo: "${query}". Responde breve con humor, cuenta un chiste de viajes y regrésalo a ${info.paso} pidiendo su ${info.siguienteDato}.`;
     }
 
     try {
@@ -57,13 +55,12 @@ async function generarRespuestaIA(query, modo, info = {}) {
             messages: [{ "role": "system", "content": systemPrompt }, { "role": "user", "content": query }]
         }, {
             headers: { "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`, "Content-Type": "application/json" },
-            timeout: 4500 // Tiempo máximo de espera
+            timeout: 4000
         });
         return response.data.choices[0].message.content;
     } catch (e) {
-        console.error("❌ Falló la IA de OpenRouter:", e.message);
-        // Si la IA falla, damos una respuesta manual CREATIVA de respaldo
-        return `¡Vaya Axel! Me quedé pensando en esa pregunta de "${query}", pero me distraje acomodando las correas. 😂 Por cierto, un chiste: ¿Qué le dijo una maleta a la otra? "¡Qué pesado eres!". Pero bueno, volviendo a lo nuestro, estábamos en ${info.paso}, ¿qué ${info.siguienteDato} prefieres?`;
+        // RESPUESTA MANUAL DE EMERGENCIA (Ahora usa el nombre real del usuario)
+        return `¡Vaya ${info.nombre}! Me distraje un segundo con las maletas. 😂 Un chiste rápido: ¿Por qué las maletas no van a la escuela? ¡Porque ya están llenas de conocimientos! Pero bueno, estábamos en ${info.paso}, ¿qué ${info.siguienteDato} prefieres?`;
     }
 }
 
@@ -77,6 +74,7 @@ app.post("/webhook", async (req, res) => {
         let v = queryResult.parameters[nombre];
         if (!v && queryResult.outputContexts) {
             for (const ctx of queryResult.outputContexts) {
+                const cleanName = ctx.name.split('/').pop();
                 if (ctx.parameters && ctx.parameters[nombre]) { v = ctx.parameters[nombre]; break; }
             }
         }
@@ -85,33 +83,41 @@ app.post("/webhook", async (req, res) => {
     };
 
     try {
-        const usuario = getDato("usuario") || "Axel";
+        const usuario = getDato("usuario") || "Cliente";
+        const enEncuesta = queryResult.outputContexts?.some(c => c.name.toLowerCase().includes("pasoencuesta"));
         const enCalificacion = queryResult.outputContexts?.some(c => c.name.toLowerCase().includes("esperandocalificacion"));
 
-        // --- DETECTAR PASO ACTUAL ---
-        let paso = "el inicio del catálogo", siguiente = "producto";
-        if (getDato("producto")) { paso = "la elección del tamaño"; siguiente = "tamaño"; }
-        if (getDato("tamano")) { paso = "la elección del color"; siguiente = "color"; }
-        if (getDato("color")) { paso = "la confirmación final"; siguiente = "confirmación (Sí o No)"; }
-
-        // REINICIO
-        if (intentName === "9 PasoNuevoPedido" || userQuery.toLowerCase() === "reiniciar") {
+        // --- PRIORIDAD 1: REINICIO ---
+        if (intentName.includes("9") || userQuery.toLowerCase() === "reiniciar") {
             const borrar = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "esperandocalificacion"];
             return res.json({
-                fulfillmentText: "🧹 ¡Memoria limpia! Escribe 'Hola' para ver nuestras maletas de nuevo.",
+                fulfillmentText: "🧹 ¡Borrón y cuenta nueva! Escribe 'Hola' para empezar de nuevo.",
                 outputContexts: borrar.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }))
             });
         }
 
-        // REGISTRO FINAL (6.1)
-        if (intentName === "6.1 PasoFinalSi") {
+        // --- PRIORIDAD 2: PROCESO DE ENCUESTA (Bloqueado contra bucles) ---
+        if (intentName.includes("7.1") || (enEncuesta && userQuery.toLowerCase().includes("si"))) {
+            return res.json({ 
+                fulfillmentText: `¡Genial, ${usuario}! ⭐ ¿Cómo calificarías tu experiencia con nuestro chat? (Mala, Regular, Buena, Excelente)`,
+                outputContexts: [
+                    { name: `${session}/contexts/pasoencuesta`, lifespanCount: 0 },
+                    { name: `${session}/contexts/esperandocalificacion`, lifespanCount: 1 }
+                ]
+            });
+        }
+
+        // --- PRIORIDAD 3: REGISTRO FINAL (6.1) ---
+        if (intentName.includes("6.1")) {
             const id = generarID();
-            const prod = getDato("producto"); const tam = getDato("tamano"); const col = getDato("color");
+            const prod = getDato("producto"); const tam = getDato("tamano");
             const precio = calcularPrecio(prod, tam);
-            await registrarEnSheets({ id, usuario, producto: prod, tamano: tam, color: col, precio });
-            
+            await registrarEnSheets({ id, usuario, producto: prod, tamano: tam, color: getDato("color"), precio });
+
             const resumen = `¡Listo, ${usuario}! 🎉 Pedido ID: ${id}\n🎒: ${prod}\n📏: ${tam}\n💰: ${precio}\n\n¿Deseas responder una encuesta?`;
-            const out = ["iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal"].map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }));
+            
+            const ctxsVenta = ["iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal"];
+            const out = ctxsVenta.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }));
             out.push({ name: `${session}/contexts/pasoencuesta`, lifespanCount: 1 });
 
             return res.json({
@@ -120,24 +126,28 @@ app.post("/webhook", async (req, res) => {
             });
         }
 
-        // DESPEDIDA (8 O 7.2 O FALLBACK EN CALIFICACIÓN)
-        if (intentName === "8 PasoDespedida" || intentName === "7.2 PasoEncuestaNo" || (intentName.includes("Fallback") && enCalificacion)) {
-            const respIA = await generarRespuestaIA(userQuery, "despedida", { nombre: usuario });
+        // --- PRIORIDAD 4: DESPEDIDA FINAL ---
+        if (intentName.includes("8") || intentName.includes("7.2") || (intentName.includes("Fallback") && enCalificacion)) {
+            const despedida = await generarRespuestaIA(userQuery, "despedida", { nombre: usuario });
             const todos = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "esperandocalificacion"];
-            return res.json({ fulfillmentText: respIA, outputContexts: todos.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 })) });
+            return res.json({
+                fulfillmentText: despedida,
+                outputContexts: todos.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }))
+            });
         }
 
-        // --- IA PARA INTERRUPCIONES (PIZZA, PERROS, ETC) ---
-        const esVenta = ["3.1 CompraProducto", "4 SeleccionTamano", "5 SeleccionColor"].includes(intentName);
-        const modoIA = (intentName.includes("Fallback") || !esVenta) ? "interrupcion" : "normal";
-        
-        const respuestaIA = await generarRespuestaIA(userQuery, modoIA, { paso, siguienteDato: siguiente, nombre: usuario });
+        // --- PRIORIDAD 5: CHARLA CREATIVA / INTERRUPCIONES ---
+        let paso = "el inicio", sig = "producto";
+        if (getDato("producto")) { paso = "el tamaño"; sig = "tamaño"; }
+        if (getDato("tamano")) { paso = "el color"; sig = "color"; }
+        if (getDato("color")) { paso = "la confirmación"; sig = "confirmación"; }
+
+        const respuestaIA = await generarRespuestaIA(userQuery, "interrupcion", { paso, siguienteDato: sig, nombre: usuario });
         return res.json({ fulfillmentText: respuestaIA });
 
     } catch (err) {
-        return res.json({ fulfillmentText: "¡Excelente punto! 🧳 Pero volviendo a lo nuestro, ¿confirmamos tu pedido?" });
+        return res.json({ fulfillmentText: "¡Excelente! ¿Confirmamos el pedido? 🧳" });
     }
 });
 
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 Bot Maestro en puerto ${PORT}`));
+app.listen(process.env.PORT || 10000);
