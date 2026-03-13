@@ -6,7 +6,7 @@ const { GoogleSpreadsheet } = require('google-spreadsheet');
 const app = express();
 app.use(express.json({ limit: "2mb" }));
 
-// --- 1. CONFIGURACIÓN DE NEGOCIO ---
+// --- 1. MATRIZ DE PRECIOS ---
 const PRECIOS = {
     "Mochila": { "Pequeña": "$600", "Mediana": "$850", "Grande": "$1,100" },
     "Maleta": { "Pequeña": "$1,200", "Mediana": "$1,500", "Grande": "$2,000" },
@@ -14,8 +14,8 @@ const PRECIOS = {
 };
 
 const calcularPrecio = (p, t) => {
-    const prod = p ? p.charAt(0).toUpperCase() + p.slice(1).toLowerCase() : "Maleta";
-    const tam = t ? t.charAt(0).toUpperCase() + t.slice(1).toLowerCase() : "Mediana";
+    const prod = p ? p.charAt(0).toUpperCase() + p.slice(1).toLowerCase() : "";
+    const tam = t ? t.charAt(0).toUpperCase() + t.slice(1).toLowerCase() : "";
     return (PRECIOS[prod] && PRECIOS[prod][tam]) ? `${PRECIOS[prod][tam]} MXN` : "$1,500 MXN";
 };
 
@@ -32,49 +32,44 @@ const doc = new GoogleSpreadsheet(process.env.GOOGLE_SHEET_ID, serviceAccountAut
 async function registrarEnSheets(d) {
     try {
         await doc.loadInfo();
-        const sheet = doc.sheetsByIndex[0];
-        await sheet.addRow({
+        await doc.sheetsByIndex[0].addRow({
             "ID_Pedido": d.id, "Fecha": new Date().toLocaleString(), "Usuario": d.usuario,
             "Producto": d.producto, "Tamaño": d.tamano, "Color": d.color, "Precio": d.precio, "Estado": "Pendiente"
         });
-        console.log("✅ [Sheets] Fila escrita con éxito.");
-    } catch (e) { console.error("❌ [Sheets] Error:", e.message); }
+    } catch (e) { console.error("❌ Error Sheets:", e.message); }
 }
 
-// --- 3. LÓGICA DE IA (OPENROUTER) CON LOGS ---
+// --- 3. LÓGICA DE IA (POLLINATIONS) ---
 async function generarRespuestaIA(query, modo, info = {}) {
     let systemPrompt = "";
     if (modo === "despedida") {
-        systemPrompt = `Vendedor amable. El cliente ${info.nombre} terminó. Agradece, cuenta un chiste corto de maletas y dile que escriba 'Hola' para volver.`;
+        systemPrompt = `Eres un vendedor amable. El cliente ${info.nombre} terminó su compra y calificó el servicio como: "${query}". 
+        INSTRUCCIONES: 
+        1. Agradece brevemente.
+        2. Cuenta un chiste corto de maletas o viajes. 
+        3. Dile que escriba 'Hola' para un nuevo pedido. 
+        4. Despídete con emojis.`;
+    } else if (modo === "interrupcion") {
+        systemPrompt = `Vendedor experto. El usuario preguntó: "${query}". Responde con humor, cuenta un chiste corto de viajes y regrésalo al paso de ${info.paso} pidiendo su ${info.siguienteDato}.`;
     } else {
-        systemPrompt = `Vendedor experto. Axel preguntó: "${query}". Responde breve con humor, cuenta un chiste de maletas y regrésalo a ${info.paso} pidiendo su ${info.siguienteDato}.`;
+        systemPrompt = "Vendedor experto de maletas. Sé breve y amable.";
     }
 
-    console.log(`⏳ [IA] Intentando conectar con OpenRouter (Modelo: Gemini Free)...`);
-
     try {
-        const response = await axios.post("https://openrouter.ai/api/v1/chat/completions", {
-            model: "google/gemini-2.0-flash-lite-preview-09-2025:free",
-            messages: [{ "role": "system", "content": systemPrompt }, { "role": "user", "content": query }]
-        }, {
-            headers: { "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`, "Content-Type": "application/json" },
-            timeout: 0 // TIEMPO INDEFINIDO: Esperará lo que la API tarde en responder
+        const resp = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(query)}`, {
+            params: { system: systemPrompt, model: "openai", seed: Math.floor(Math.random() * 1000) },
+            timeout: 3200 
         });
-
-        console.log("✅ [IA] Conexión exitosa. Respuesta recibida.");
-        return response.data.choices[0].message.content;
-
-    } catch (e) {
-        console.error("❌ [IA] Error de conexión con el servicio de IA:", e.message);
-        // Respuesta manual de emergencia si la conexión falla totalmente
-        return `¡Vaya ${info.nombre}! Me distraje un segundo con las maletas. 😂 ¿Sabías que las maletas no van a la escuela? ¡Porque ya están llenas! Pero bueno, estábamos en ${info.paso}, ¿qué ${info.siguienteDato} prefieres?`;
+        return resp.data;
+    } catch (e) { 
+        return `¡Gracias por tu preferencia, ${info.nombre}! 🙌 Escribe 'Hola' si quieres iniciar un nuevo pedido. ¡Buen viaje! ✈️`; 
     }
 }
 
 // --- 4. WEBHOOK PRINCIPAL ---
 app.post("/webhook", async (req, res) => {
     const { queryResult, session } = req.body;
-    const intentName = queryResult.intent ? queryResult.intent.displayName : "Fallback";
+    const intentName = queryResult.intent ? queryResult.intent.displayName : "Default Fallback Intent";
     const userQuery = queryResult.queryText;
 
     const getDato = (nombre) => {
@@ -84,63 +79,77 @@ app.post("/webhook", async (req, res) => {
                 if (ctx.parameters && ctx.parameters[nombre]) { v = ctx.parameters[nombre]; break; }
             }
         }
-        return (v && typeof v === 'object' && v.name) ? v.name : (v || null);
+        if (v && typeof v === 'object' && v.name) v = v.name; 
+        return v || null;
     };
 
     try {
-        const usuario = getDato("usuario") || getDato("person") || "Cliente";
-        const enEncuesta = queryResult.outputContexts?.some(c => c.name.toLowerCase().includes("pasoencuesta"));
-        const enCalificacion = queryResult.outputContexts?.some(c => c.name.toLowerCase().includes("esperandocalificacion"));
+        const usuario = getDato("usuario") || "Cliente";
+        const estaEnEncuesta = queryResult.outputContexts?.some(c => c.name.includes("esperandocalificacion"));
 
-        // A) REINICIO
-        if (intentName.includes("9") || userQuery.toLowerCase() === "reiniciar") {
+        // --- REINICIO TOTAL ---
+        if (intentName === "9 PasoNuevoPedido" || userQuery.toLowerCase() === "reiniciar") {
             const borrar = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "esperandocalificacion"];
-            return res.json({ fulfillmentText: "🧹 ¡Borrón y cuenta nueva! Escribe 'Hola' para empezar de nuevo.", outputContexts: borrar.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 })) });
+            return res.json({
+                fulfillmentText: "🧹 Memoria limpia. Escribe 'Hola' para empezar de nuevo.",
+                outputContexts: borrar.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }))
+            });
         }
 
-        // B) REGISTRO 6.1
-        if (intentName.includes("6.1")) {
+        // --- PASO 6.1: REGISTRO Y LIMPIEZA ---
+        if (intentName === "6.1 PasoFinalSi") {
             const id = generarID();
-            const prod = getDato("producto") || "Maleta"; const tam = getDato("tamano") || "Mediana";
+            const prod = getDato("producto") || "Maleta";
+            const tam = getDato("tamano") || "Mediana";
             const precio = calcularPrecio(prod, tam);
-            await registrarEnSheets({ id, usuario, producto: prod, tamano: tam, color: getDato("color") || "Gris", precio });
+            await registrarEnSheets({ id, usuario, producto: prod, tamano: tam, color: getDato("color"), precio });
 
-            const resumen = `¡Listo, ${usuario}! 🎉 Pedido ID: ${id}\n🎒: ${prod}\n📏: ${tam}\n💰: ${precio}\n\n¿Deseas responder una encuesta?`;
-            const borrar = ["iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal"];
-            const out = borrar.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }));
-            out.push({ name: `${session}/contexts/pasoencuesta`, lifespanCount: 1 });
+            const resumen = `¡Listo, ${usuario}! 🎉 Pedido registrado ID: ${id}\n🎒: ${prod}\n📏: ${tam}\n💰: ${precio}\n\n¿Te gustaría responder una encuesta de satisfacción?`;
+            
+            const limpiarCompra = ["iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal"];
+            const outCtxs = limpiarCompra.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }));
+            outCtxs.push({ name: `${session}/contexts/pasoencuesta`, lifespanCount: 1 });
 
             return res.json({
                 fulfillmentMessages: [{ "text": { "text": [resumen] } }, { "payload": { "facebook": { "attachment": { "type": "template", "payload": { "template_type": "button", "text": "Selecciona:", "buttons": [{ "type": "postback", "title": "Sí", "payload": "Si" }, { "type": "postback", "title": "No", "payload": "No" }] } } } } }],
-                outputContexts: out
+                outputContexts: outCtxs
             });
         }
 
-        // C) ENCUESTA 7.1
-        if (intentName.includes("7.1") || (enEncuesta && userQuery.toLowerCase().includes("si"))) {
+        // --- PASO 7.1: PREGUNTA ENCUESTA ---
+        if (intentName === "7.1 PasoEncuestaSi") {
             return res.json({ 
-                fulfillmentText: `¡Genial, ${usuario}! ⭐ ¿Cómo calificarías tu experiencia?`,
-                outputContexts: [{ name: `${session}/contexts/pasoencuesta`, lifespanCount: 0 }, { name: `${session}/contexts/esperandocalificacion`, lifespanCount: 1 }]
+                fulfillmentText: `¡Genial, ${usuario}! ⭐ ¿Cómo calificarías tu experiencia con nuestro chat? (Mala, Regular, Buena, Excelente)`,
+                outputContexts: [
+                    { name: `${session}/contexts/pasoencuesta`, lifespanCount: 0 },
+                    { name: `${session}/contexts/esperandocalificacion`, lifespanCount: 1 }
+                ]
             });
         }
 
-        // D) DESPEDIDA
-        if (intentName.includes("8") || intentName.includes("7.2") || enCalificacion) {
-            const resp = await generarRespuestaIA(userQuery, "despedida", { nombre: usuario });
-            const todos = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "esperandocalificacion"];
-            return res.json({ fulfillmentText: resp, outputContexts: todos.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 })) });
+        // --- PASO 8 / 7.2: DESPEDIDA FINAL ---
+        // Si el intent es el de despedida O si el bot no entendió pero estábamos esperando la calificación
+        if (intentName === "8 PasoDespedida" || intentName === "7.2 PasoEncuestaNo" || (intentName.includes("Fallback") && estaEnEncuesta)) {
+            const despedida = await generarRespuestaIA(userQuery, "despedida", { nombre: usuario });
+            const borrarTodo = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "esperandocalificacion"];
+            return res.json({
+                fulfillmentText: despedida,
+                outputContexts: borrarTodo.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }))
+            });
         }
 
-        // E) IA INTERRUPCIONES
-        let p = "inicio", s = "producto";
-        if (getDato("producto")) { p = "el tamaño"; s = "tamaño"; }
-        if (getDato("tamano")) { p = "el color"; s = "color"; }
-        
-        const respIA = await generarRespuestaIA(userQuery, "interrupcion", { paso: p, siguienteDato: s, nombre: usuario });
-        return res.json({ fulfillmentText: respIA });
+        // --- IA PARA INTERRUPCIONES ---
+        let pActual = "el inicio", sDato = "producto";
+        if (getDato("producto")) { pActual = "el tamaño"; sDato = "tamaño"; }
+        if (getDato("tamano")) { pActual = "el color"; sDato = "color"; }
 
-    } catch (err) { return res.json({ fulfillmentText: "¡Excelente! ¿Confirmamos el pedido? 🧳" }); }
+        const respuestaIA = await generarRespuestaIA(userQuery, "interrupcion", { paso: pActual, siguienteDato: sDato, nombre: usuario });
+        return res.json({ fulfillmentText: respuestaIA });
+
+    } catch (err) {
+        return res.json({ fulfillmentText: "¡Excelente! ¿Confirmamos tu pedido? 🧳" });
+    }
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 Servidor en puerto ${PORT} con monitoreo de IA activo`));
+app.listen(PORT, () => console.log(`🚀 Puerto: ${PORT}`));
