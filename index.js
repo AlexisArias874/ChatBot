@@ -38,37 +38,40 @@ async function registrarEnSheets(d) {
             "Producto": d.producto, "Tamaño": d.tamano, "Color": d.color, "Precio": d.precio, "Estado": "Pendiente"
         });
         console.log("✅ [Sheets] Pedido registrado correctamente.");
-    } catch (e) { console.error("❌ [Sheets] Error de registro:", e.message); }
+    } catch (e) { console.error("❌ [Sheets] Error:", e.message); }
 }
 
-// --- 3. LÓGICA DE IA (POLLINATIONS) CON LOGS ---
+// --- 3. LÓGICA DE IA (POLLINATIONS CON ROTACIÓN Y LOGS) ---
 async function generarRespuestaIA(query, modo, info = {}) {
     let systemPrompt = "";
     if (modo === "despedida") {
         systemPrompt = `Vendedor amable. El cliente ${info.nombre} terminó. Agradece, cuenta un chiste corto de maletas y dile que escriba 'Hola' para volver.`;
     } else {
-        systemPrompt = `Vendedor experto. Axel preguntó: "${query}". Responde breve con humor, cuenta un chiste de maletas y regrésalo a ${info.paso} pidiendo su ${info.siguienteDato}.`;
+        systemPrompt = `Vendedor experto. Axel preguntó: "${query}". Responde breve con humor, cuenta un chiste y regrésalo a ${info.paso} pidiendo su ${info.siguienteDato}.`;
     }
 
-    console.log(`⏳ [IA] Conectando con Pollinations AI (Modelo: OpenAI)...`);
+    // Lista de modelos a intentar para evitar el error 429
+    const modelos = ["mistral", "p1", "openai"];
+    
+    for (let modelo of modelos) {
+        console.log(`⏳ [IA] Intentando conectar con Pollinations (Modelo: ${modelo})...`);
+        try {
+            const response = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(query)}`, {
+                params: { system: systemPrompt, model: modelo, seed: Math.floor(Math.random() * 1000) },
+                timeout: 0 // TIEMPO INDEFINIDO
+            });
 
-    try {
-        const response = await axios.get(`https://text.pollinations.ai/${encodeURIComponent(query)}`, {
-            params: { 
-                system: systemPrompt, 
-                model: "openai", 
-                seed: Math.floor(Math.random() * 1000) 
-            },
-            timeout: 0 // TIEMPO INDEFINIDO
-        });
-
-        console.log("✅ [IA] Respuesta de Pollinations recibida con éxito.");
-        return response.data;
-
-    } catch (e) {
-        console.error("❌ [IA] Fallo en el servicio Pollinations:", e.message);
-        return `¡Vaya ${info.nombre}! Me distraje un segundo con las maletas. 😂 ¿Sabías que las maletas no van a la escuela? ¡Porque ya están llenas! Pero bueno, estábamos en ${info.paso}, ¿qué ${info.siguienteDato} prefieres?`;
+            console.log(`✅ [IA] Respuesta recibida con éxito (Modelo: ${modelo}).`);
+            return response.data;
+        } catch (e) {
+            console.warn(`⚠️ [IA] El modelo ${modelo} falló o está saturado. Intentando con el siguiente...`);
+            continue; // Prueba el siguiente modelo de la lista
+        }
     }
+
+    // Si todos los modelos fallan:
+    console.error("❌ [IA] Todos los modelos de Pollinations fallaron.");
+    return `¡Vaya ${info.nombre}! Me distraje un segundo con las maletas. 😂 ¿Sabías que las maletas no van a la escuela? ¡Porque ya están llenas! Pero bueno, estábamos en ${info.paso}, ¿qué ${info.siguienteDato} prefieres?`;
 }
 
 // --- 4. WEBHOOK PRINCIPAL ---
@@ -92,14 +95,14 @@ app.post("/webhook", async (req, res) => {
         const enEncuesta = queryResult.outputContexts?.some(c => c.name.toLowerCase().includes("pasoencuesta"));
         const enCalificacion = queryResult.outputContexts?.some(c => c.name.toLowerCase().includes("esperandocalificacion"));
 
-        let p = "inicio", s = "producto";
-        if (getDato("producto")) { p = "tamaño"; s = "tamaño"; }
-        if (getDato("tamano")) { p = "color"; s = "color"; }
+        let p = "el catálogo", s = "producto";
+        if (getDato("producto")) { p = "la elección de tamaño"; s = "tamaño"; }
+        if (getDato("tamano")) { p = "la elección de color"; s = "color"; }
 
         // A) REINICIO
         if (intentName.includes("9") || userQuery.toLowerCase() === "reiniciar") {
             const borrar = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "esperandocalificacion"];
-            return res.json({ fulfillmentText: "🧹 ¡Borrón y cuenta nueva! Escribe 'Hola' para empezar.", outputContexts: borrar.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 })) });
+            return res.json({ fulfillmentText: "🧹 ¡Memoria limpia! Escribe 'Hola' para empezar.", outputContexts: borrar.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 })) });
         }
 
         // B) REGISTRO 6.1
@@ -109,7 +112,7 @@ app.post("/webhook", async (req, res) => {
             const precio = calcularPrecio(prod, tam);
             await registrarEnSheets({ id, usuario, producto: prod, tamano: tam, color: getDato("color"), precio });
 
-            const resumen = `¡Listo, ${usuario}! 🎉 Pedido ID: ${id}\n🎒: ${prod}\n📏: ${tam}\n💰: ${precio}\n\n¿Deseas responder una encuesta?`;
+            const resumen = `¡Listo, ${usuario}! 🎉 Pedido registrado ID: ${id}\n🎒: ${prod}\n📏: ${tam}\n💰: ${precio}\n\n¿Deseas responder una encuesta?`;
             const out = ["iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal"].map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }));
             out.push({ name: `${session}/contexts/pasoencuesta`, lifespanCount: 1 });
 
@@ -142,4 +145,4 @@ app.post("/webhook", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 Servidor con Pollinations AI activo en puerto ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Puerto: ${PORT} | Monitoreo Pollinations Activo`));
