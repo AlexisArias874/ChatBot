@@ -1,7 +1,7 @@
 {
   "name": "bot-equipaje",
   "version": "1.0.0",
-  "description": "Bot para venta de equipaje",
+  "description": "Bot para venta de equipaje con OpenRouter",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -13,4 +13,3 @@
     "google-auth-library": "^9.4.1"
   }
 }
-
