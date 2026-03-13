@@ -40,23 +40,13 @@ async function registrarEnSheets(d) {
     } catch (e) { console.error("❌ Error Sheets:", e.message); }
 }
 
-// --- 3. LÓGICA DE IA (OPENROUTER) CON REDIRECCIÓN ---
-async function generarRespuestaIA(query, modo, infoVenta = {}) {
+// --- 3. LÓGICA DE IA (OPENROUTER) ---
+async function generarRespuestaIA(query, modo, info = {}) {
     let systemPrompt = "";
-    
-    if (modo === "interrupcion") {
-        // Instrucción especial para cuando el usuario se sale del tema
-        systemPrompt = `Eres el vendedor estrella de 'Venta de Equipaje'. El usuario se distrajo preguntando: "${query}". 
-        INSTRUCCIONES:
-        1. Responde con ingenio y brevedad (relacionado con maletas si es posible).
-        2. ¡OBLIGATORIO! Cuenta una broma corta de viajes o aeropuertos.
-        3. Regresa al usuario al proceso de venta amablemente. 
-        4. Recuérdale que se quedó en el paso de: ${infoVenta.paso}.
-        5. Pregúntale por su ${infoVenta.siguienteDato} para continuar.`;
-    } else if (modo === "despedida") {
-        systemPrompt = `Vendedor amable. El cliente ${infoVenta.nombre} terminó. Despídete, cuenta un chiste de maletas y dile que escriba 'Hola' para volver.`;
+    if (modo === "despedida") {
+        systemPrompt = `Eres un vendedor amable. El cliente ${info.nombre} terminó. Agradece, cuenta un chiste corto de maletas y dile que escriba 'Hola' para volver.`;
     } else {
-        systemPrompt = "Eres un vendedor experto de maletas. Sé breve, amable y cierra con pregunta de venta.";
+        systemPrompt = `Vendedor experto. El usuario preguntó: "${query}". Responde con humor, cuenta un chiste de viajes y regrésalo al paso de ${info.paso} pidiendo su ${info.siguienteDato}.`;
     }
 
     try {
@@ -69,7 +59,7 @@ async function generarRespuestaIA(query, modo, infoVenta = {}) {
         });
         return response.data.choices[0].message.content;
     } catch (e) {
-        return `¡Vaya, me distraje! 😅 Pero volviendo a lo nuestro, estábamos en el paso de ${infoVenta.paso}, ¿qué ${infoVenta.siguienteDato} prefieres?`;
+        return `¡Vaya, me distraje! 😅 Pero dime, Axel, ¿qué ${info.siguienteDato || 'producto'} prefieres?`;
     }
 }
 
@@ -92,62 +82,64 @@ app.post("/webhook", async (req, res) => {
 
     try {
         const usuario = getDato("usuario") || "Cliente";
+        const enEncuesta = queryResult.outputContexts?.some(c => c.name.includes("pasoencuesta"));
+        const enCalificacion = queryResult.outputContexts?.some(c => c.name.includes("esperandocalificacion"));
 
-        // --- DETECTAR EL PASO ACTUAL PARA RE-DIRIGIR ---
-        let pasoActual = "inicio del catálogo";
-        let datoFaltante = "producto (mochila, maleta o bolso)";
-        
-        if (getDato("producto")) { pasoActual = "seleccionar el tamaño"; datoFaltante = "tamaño (pequeña, mediana o grande)"; }
-        if (getDato("tamano")) { pasoActual = "elegir el color"; datoFaltante = "color (negro, blanco o gris)"; }
-        if (getDato("color")) { pasoActual = "confirmar tu pedido"; datoFaltante = "confirmación (Sí o No)"; }
-
-        // --- REINICIO TOTAL ---
+        // --- REINICIO ---
         if (intentName === "9 PasoNuevoPedido" || userQuery.toLowerCase() === "reiniciar") {
-            const ctxs = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "esperandocalificacion"];
+            const borrar = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "esperandocalificacion"];
             return res.json({
-                fulfillmentText: "🧹 ¡Borrón y cuenta nueva! Escribe 'Hola' para empezar de nuevo.",
-                outputContexts: ctxs.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }))
+                fulfillmentText: "🧹 ¡Todo limpio! Escribe 'Hola' para comenzar de nuevo.",
+                outputContexts: borrar.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }))
             });
         }
 
-        // --- REGISTRO FINAL (6.1) ---
+        // --- 6.1 REGISTRO FINAL ---
         if (intentName === "6.1 PasoFinalSi") {
             const id = generarID();
-            const prod = getDato("producto"); const tam = getDato("tamano"); const col = getDato("color");
+            const prod = getDato("producto") || "Maleta";
+            const tam = getDato("tamano") || "Mediana";
+            const col = getDato("color") || "Gris";
             const precio = calcularPrecio(prod, tam);
             await registrarEnSheets({ id, usuario, producto: prod, tamano: tam, color: col, precio });
+
+            const resumen = `¡Listo, ${usuario}! 🎉 Pedido ID: ${id}\n🎒: ${prod}\n📏: ${tam}\n💰: ${precio}\n\n¿Deseas responder una encuesta?`;
             
-            const resumen = `¡Listo, ${usuario}! 🎉 Pedido registrado ID: ${id}\n🎒: ${prod}\n📏: ${tam}\n💰: ${precio}\n\n¿Quieres realizar una encuesta de satisfacción?`;
-            const borrar = ["iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal"];
-            const outCtxs = borrar.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }));
-            outCtxs.push({ name: `${session}/contexts/pasoencuesta`, lifespanCount: 1 });
+            // BORRAMOS VENTA, ACTIVAMOS ENCUESTA
+            const ctxsVenta = ["iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal"];
+            const out = ctxsVenta.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }));
+            out.push({ name: `${session}/contexts/pasoencuesta`, lifespanCount: 1 });
 
             return res.json({
                 fulfillmentMessages: [{ "text": { "text": [resumen] } }, { "payload": { "facebook": { "attachment": { "type": "template", "payload": { "template_type": "button", "text": "Selecciona:", "buttons": [{ "type": "postback", "title": "Sí", "payload": "Si" }, { "type": "postback", "title": "No", "payload": "No" }] } } } } }],
-                outputContexts: outCtxs
+                outputContexts: out
             });
         }
 
-        // --- DESPEDIDA (8 O 7.2) ---
-        if (intentName === "8 PasoDespedida" || intentName === "7.2 PasoEncuestaNo" || (intentName.includes("Fallback") && queryResult.outputContexts?.some(c => c.name.includes("esperandocalificacion")))) {
-            const respIA = await generarRespuestaIA(userQuery, "despedida", { nombre: usuario });
-            const ctxs = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "esperandocalificacion"];
-            return res.json({ fulfillmentText: respIA, outputContexts: ctxs.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 })) });
+        // --- 7.1 ACEPTAR ENCUESTA ---
+        if (intentName === "7.1 PasoEncuestaSi" || (enEncuesta && userQuery.toLowerCase().includes("si"))) {
+            return res.json({ 
+                fulfillmentText: `¡Genial! ⭐ ¿Cómo calificarías tu experiencia? (Mala, Regular, Buena, Excelente)`,
+                outputContexts: [{ name: `${session}/contexts/pasoencuesta`, lifespanCount: 0 }, { name: `${session}/contexts/esperandocalificacion`, lifespanCount: 1 }]
+            });
         }
 
-        // --- LÓGICA DE CHARLA CREATIVA (FALLBACK O INTERRUPCIÓN) ---
-        const intentsVenta = ["3.1 CompraProducto", "4 SeleccionTamano", "5 SeleccionColor"];
-        const modoIA = (intentName.includes("Fallback") || !intentsVenta.includes(intentName)) ? "interrupcion" : "normal";
-        
-        const respuestaIA = await generarRespuestaIA(userQuery, modoIA, { paso: pasoActual, siguienteDato: datoFaltante, nombre: usuario });
-        return res.json({ fulfillmentText: respuestaIA });
+        // --- 8 / 7.2 DESPEDIDA (CHISTE E IA) ---
+        if (intentName === "8 PasoDespedida" || intentName === "7.2 PasoEncuestaNo" || (intentName.includes("Fallback") && enCalificacion)) {
+            const despedida = await generarRespuestaIA(userQuery, "despedida", { nombre: usuario });
+            const todos = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "esperandocalificacion"];
+            return res.json({ fulfillmentText: despedida, outputContexts: todos.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 })) });
+        }
 
-    } catch (err) {
-        console.error("Error:", err.message);
-        return res.json({ fulfillmentText: "¡Qué buen punto! 🧳 Pero volviendo a lo nuestro, ¿confirmamos tu pedido?" });
-    }
+        // --- IA PARA INTERRUPCIONES ---
+        let paso = "inicio", sig = "producto";
+        if (getDato("producto")) { paso = "tamaño"; sig = "tamaño"; }
+        if (getDato("tamano")) { paso = "color"; sig = "color"; }
+
+        const respuesta = await generarRespuestaIA(userQuery, "interrupcion", { paso, siguienteDato: sig, nombre: usuario });
+        return res.json({ fulfillmentText: respuesta });
+
+    } catch (err) { return res.json({ fulfillmentText: "¡Excelente! ¿Confirmamos el pedido? 🧳" }); }
 });
 
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 Bot Maestro de Equipaje Activo`));
-
+app.listen(process.env.PORT || 10000);
