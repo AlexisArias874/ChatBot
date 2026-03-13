@@ -6,7 +6,7 @@ const { GoogleSpreadsheet } = require('google-spreadsheet');
 const app = express();
 app.use(express.json({ limit: "2mb" }));
 
-// --- 1. CONFIGURACIÓN ---
+// --- 1. MATRIZ DE PRECIOS ---
 const PRECIOS = {
     "Mochila": { "Pequeña": "$600", "Mediana": "$850", "Grande": "$1,100" },
     "Maleta": { "Pequeña": "$1,200", "Mediana": "$1,500", "Grande": "$2,000" },
@@ -21,6 +21,7 @@ const calcularPrecio = (p, t) => {
 
 const generarID = () => `VE-${Date.now().toString().slice(-6)}-${Math.floor(1000 + Math.random() * 9000)}`;
 
+// --- 2. CONFIGURACIÓN GOOGLE SHEETS ---
 const serviceAccountAuth = new JWT({
     email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
     key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
@@ -31,18 +32,20 @@ const doc = new GoogleSpreadsheet(process.env.GOOGLE_SHEET_ID, serviceAccountAut
 async function registrarEnSheets(d) {
     try {
         await doc.loadInfo();
-        await doc.sheetsByIndex[0].addRow({
+        const sheet = doc.sheetsByIndex[0];
+        await sheet.addRow({
             "ID_Pedido": d.id, "Fecha": new Date().toLocaleString(), "Usuario": d.usuario,
             "Producto": d.producto, "Tamaño": d.tamano, "Color": d.color, "Precio": d.precio, "Estado": "Pendiente"
         });
+        console.log("✅ Pedido registrado con éxito.");
     } catch (e) { console.error("❌ Error Sheets:", e.message); }
 }
 
-// --- 2. IA ---
+// --- 3. LÓGICA DE IA (OPENROUTER) ---
 async function generarRespuestaIA(query, modo, info = {}) {
     let systemPrompt = modo === "despedida" 
-        ? `Vendedor carismático. Axel calificó con "${query}". Agradece, cuenta un chiste corto de maletas y dile que escriba 'Hola' para volver.`
-        : `Vendedor experto. Axel preguntó: "${query}". Responde breve con humor, cuenta un chiste y regrésalo a ${info.paso} pidiendo su ${info.siguienteDato}.`;
+        ? `Eres un vendedor de maletas carismático. El cliente ${info.nombre} terminó. Agradece, cuenta un chiste corto de viajes y dile que escriba 'Hola' para volver.`
+        : `Vendedor experto. El usuario preguntó: "${query}". Responde con humor breve, un chiste de maletas y regrésalo a ${info.paso} pidiendo su ${info.siguienteDato}.`;
 
     try {
         const response = await axios.post("https://openrouter.ai/api/v1/chat/completions", {
@@ -50,15 +53,15 @@ async function generarRespuestaIA(query, modo, info = {}) {
             messages: [{ "role": "system", "content": systemPrompt }, { "role": "user", "content": query }]
         }, {
             headers: { "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`, "Content-Type": "application/json" },
-            timeout: 4000
+            timeout: 4200
         });
         return response.data.choices[0].message.content;
     } catch (e) {
-        return `¡Vaya ${info.nombre || 'Axel'}! Me distraje un segundo. 😂 ¿Qué le dijo una maleta a la otra? "¡Qué pesado eres!". Pero bueno, estábamos en ${info.paso}, ¿qué ${info.siguienteDato} prefieres?`;
+        return `¡Vaya ${info.nombre || 'viajero'}! Me distraje un segundo. 😂 ¿Sabías que las maletas no van a la escuela? ¡Porque ya están llenas! Pero dime, estábamos en ${info.paso}, ¿qué ${info.siguienteDato} prefieres?`;
     }
 }
 
-// --- 3. WEBHOOK ---
+// --- 4. WEBHOOK PRINCIPAL ---
 app.post("/webhook", async (req, res) => {
     const { queryResult, session } = req.body;
     const intentName = queryResult.intent ? queryResult.intent.displayName : "Fallback";
@@ -75,46 +78,59 @@ app.post("/webhook", async (req, res) => {
     };
 
     try {
-        const usuario = getDato("usuario") || "Axel";
-        const califs = ["buena", "mala", "excelente", "deficiente", "regular", "puto", "pésima"];
+        const usuario = getDato("usuario") || "Jaime";
+        const califs = ["buena", "mala", "excelente", "deficiente", "regular", "pésima"];
         const esCalificacion = califs.some(c => userQuery.toLowerCase().includes(c));
+        const enEncuesta = queryResult.outputContexts?.some(c => c.name.toLowerCase().includes("pasoencuesta"));
 
-        // A) REINICIO
+        // A) REINICIO TOTAL
         if (intentName.includes("9") || userQuery.toLowerCase() === "reiniciar") {
-            const borrar = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "esperandocalificacion"];
-            return res.json({ fulfillmentText: "🧹 ¡Todo listo! Escribe 'Hola' para empezar.", outputContexts: borrar.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 })) });
+            const borrarTodo = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "esperandocalificacion", "PasoFinal", "InicioCompra", "PasoTamano", "PasoDosCompra"];
+            return res.json({ fulfillmentText: "🧹 ¡Borrón y cuenta nueva! Escribe 'Hola' para empezar.", outputContexts: borrarTodo.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 })) });
         }
 
-        // B) REGISTRO (6.1)
+        // B) PASO 6.1: REGISTRO FINAL (LA CLAVE ESTÁ AQUÍ)
         if (intentName.includes("6.1")) {
             const id = generarID();
-            const prod = getDato("producto"); const tam = getDato("tamano");
+            const prod = getDato("producto") || "Maleta"; const tam = getDato("tamano") || "Mediana";
             const precio = calcularPrecio(prod, tam);
-            await registrarEnSheets({ id, usuario, producto: prod, tamano: tam, color: getDato("color"), precio });
+            await registrarEnSheets({ id, usuario, producto: prod, tamano: tam, color: getDato("color") || "Gris", precio });
+
+            const resumen = `¡Listo, ${usuario}! 🎉 Pedido ID: ${id}\n🎒: ${prod}\n📏: ${tam}\n💰: ${precio}\n\n¿Deseas responder una encuesta?`;
+
+            // MATAMOS TODOS LOS CONTEXTOS DE COMPRA (MAYÚSCULAS Y MINÚSCULAS)
+            const contextosABorrar = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "PasoFinal", "InicioCompra", "PasoTamano", "PasoDosCompra"];
+            const outCtxs = contextosABorrar.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }));
+            
+            // Activamos SOLO el de encuesta
+            outCtxs.push({ name: `${session}/contexts/pasoencuesta`, lifespanCount: 1 });
 
             return res.json({
-                fulfillmentMessages: [{ "text": { "text": [`¡Listo, ${usuario}! 🎉 ID: ${id}\n🎒: ${prod}\n📏: ${tam}\n💰: ${precio}\n\n¿Deseas responder una encuesta?`] } }, { "payload": { "facebook": { "attachment": { "type": "template", "payload": { "template_type": "button", "text": "Selecciona:", "buttons": [{ "type": "postback", "title": "Sí", "payload": "Si" }, { "type": "postback", "title": "No", "payload": "No" }] } } } } }],
-                outputContexts: [{ name: `${session}/contexts/pasoencuesta`, lifespanCount: 1 }]
+                fulfillmentMessages: [{ "text": { "text": [resumen] } }, { "payload": { "facebook": { "attachment": { "type": "template", "payload": { "template_type": "button", "text": "Selecciona:", "buttons": [{ "type": "postback", "title": "Sí", "payload": "Si" }, { "type": "postback", "title": "No", "payload": "No" }] } } } } }],
+                outputContexts: outCtxs
             });
         }
 
-        // C) ENCUESTA (7.1)
-        if (intentName.includes("7.1")) {
-            return res.json({ fulfillmentText: `¡Genial, ${usuario}! ⭐ ¿Cómo calificarías tu experiencia?` });
+        // C) PASO 7.1: PREGUNTA ENCUESTA
+        if (intentName.includes("7.1") || (enEncuesta && userQuery.toLowerCase().includes("si"))) {
+            return res.json({ 
+                fulfillmentText: `¡Genial, ${usuario}! ⭐ ¿Cómo calificarías tu experiencia? (Mala, Regular, Buena, Excelente)`,
+                outputContexts: [{ name: `${session}/contexts/pasoencuesta`, lifespanCount: 0 }, { name: `${session}/contexts/esperandocalificacion`, lifespanCount: 1 }]
+            });
         }
 
-        // D) DESPEDIDA (8 O SI DETECTA CALIFICACIÓN EN EL TEXTO)
+        // D) PASO 8: DESPEDIDA (IA CON CHISTE)
         if (intentName.includes("8") || intentName.includes("7.2") || esCalificacion) {
             const resp = await generarRespuestaIA(userQuery, "despedida", { nombre: usuario });
-            const todos = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "esperandocalificacion"];
+            const todos = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "esperandocalificacion", "PasoFinal", "InicioCompra", "PasoTamano", "PasoDosCompra"];
             return res.json({ fulfillmentText: resp, outputContexts: todos.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 })) });
         }
 
-        // E) CHARLA / INTERRUPCIONES
-        let p = "inicio", s = "producto";
+        // E) IA INTERRUPCIONES
+        let p = "el inicio", s = "producto";
         if (getDato("producto")) { p = "el tamaño"; s = "tamaño"; }
         if (getDato("tamano")) { p = "el color"; s = "color"; }
-
+        
         const respIA = await generarRespuestaIA(userQuery, "interrupcion", { paso: p, siguienteDato: s, nombre: usuario });
         return res.json({ fulfillmentText: respIA });
 
