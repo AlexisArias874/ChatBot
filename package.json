@@ -1,7 +1,7 @@
 {
   "name": "bot-equipaje",
   "version": "1.0.0",
-  "description": "Bot para venta de equipaje con OpenRouter",
+  "description": "Bot para venta de equipaje con Pollinations",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
