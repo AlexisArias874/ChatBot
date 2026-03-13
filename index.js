@@ -10,21 +10,99 @@ app.use(express.json());
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID || "TU_ID_DE_SHEETS_AQUI";
 const GOOGLE_CREDS   = JSON.parse(process.env.GOOGLE_CREDS || "{}");
 
-// ─── PRECIOS ──────────────────────────────────────────────────────────────────
-const PRECIOS = {
-  Maleta:   { Pequeña: 800, Mediana: 1200, Grande: 1600 },
-  Mochila:  { Pequeña: 400, Mediana: 600,  Grande: 900  },
-  Maletín:  { Pequeña: 500, Mediana: 750,  Grande: 1000 },
+// ─── CATÁLOGO COMPLETO DE TRANSMEX ───────────────────────────────────────────
+// Centralizado aquí: si cambias algo, se refleja en toda la IA automáticamente.
+const CATALOGO = {
+  productos: ["Maleta", "Mochila", "Bolso"],
+  tamanos:   ["Pequeño", "Mediano", "Grande"],
+  colores:   ["Negro", "Azul", "Rojo", "Gris", "Café", "Verde"],
+  precios: {
+    Maleta:  { Pequeño: 800,  Mediano: 1200, Grande: 1600 },
+    Mochila: { Pequeño: 400,  Mediano: 600,  Grande: 900  },
+    Bolso:   { Pequeño: 350,  Mediano: 550,  Grande: 750  },
+  },
+  descripciones: {
+    Maleta:  "ideal para viajes largos, con ruedas y candado incluido",
+    Mochila: "perfecta para el día a día, con compartimentos organizadores",
+    Bolso:   "elegante y práctico, ideal para uso urbano y viajes cortos",
+  },
 };
 
+// ─── CONTEXTO DE CADA INTENT → qué debe hacer la IA en cada paso ─────────────
+const CONTEXTO_POR_INTENT = {
+  "0 Bienvenida": {
+    paso: "bienvenida",
+    descripcion: "El cliente acaba de saludar o iniciar el chat.",
+    instruccion: "Dale la bienvenida calurosamente y pregúntale su nombre.",
+    opciones: null,
+  },
+  "1 IdentificarUsuario": {
+    paso: "identificación",
+    descripcion: "El bot acaba de obtener el nombre del cliente.",
+    instruccion: "Salúdalo por su nombre y pregúntale qué tipo de equipaje le interesa.",
+    opciones: ["Maleta", "Mochila", "Bolso"],
+  },
+  "2.1 CompraEquipaje": {
+    paso: "selección de producto",
+    descripcion: "El cliente quiere comprar equipaje.",
+    instruccion: "Preséntale los 3 productos disponibles con una descripción breve y rango de precios de cada uno.",
+    opciones: ["Maleta", "Mochila", "Bolso"],
+  },
+  "2.2 AyudaEquipaje": {
+    paso: "asesoría de producto",
+    descripcion: "El cliente necesita ayuda para elegir qué comprar.",
+    instruccion: "Hazle una pregunta para entender su necesidad y recomiéndale el producto más adecuado del catálogo.",
+    opciones: ["Maleta", "Mochila", "Bolso"],
+  },
+  "3.1 CompraProducto": {
+    paso: "confirmación de producto",
+    descripcion: "El cliente ya eligió un producto.",
+    instruccion: "Confirma su elección con entusiasmo, menciona algo positivo de ese producto y pregúntale el tamaño.",
+    opciones: ["Pequeño", "Mediano", "Grande"],
+  },
+  "3.2 InformacionAyuda": {
+    paso: "información de producto",
+    descripcion: "El cliente pide más información sobre un producto específico.",
+    instruccion: "Dile la descripción, tamaños y precios de ese producto, luego pregunta si desea comprarlo.",
+    opciones: ["Maleta", "Mochila", "Bolso"],
+  },
+  "4 SeleccionTamano": {
+    paso: "selección de tamaño",
+    descripcion: "El cliente está eligiendo el tamaño de su producto.",
+    instruccion: "Muéstrale los 3 tamaños con precio según el producto ya elegido. Luego pregunta cuál prefiere.",
+    opciones: ["Pequeño", "Mediano", "Grande"],
+  },
+  "5 SeleccionColor": {
+    paso: "selección de color",
+    descripcion: "El cliente está eligiendo el color.",
+    instruccion: "Lista los colores disponibles de forma atractiva y pregunta cuál prefiere.",
+    opciones: ["Negro", "Azul", "Rojo", "Gris", "Café", "Verde"],
+  },
+  "Default Fallback Intent": {
+    paso: "sin contexto claro",
+    descripcion: "El bot no entendió al cliente.",
+    instruccion: "Pide disculpas brevemente, menciona que solo vendes Maletas, Mochilas y Bolsos, y guíalo al paso correcto.",
+    opciones: null,
+  },
+};
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
 function calcularPrecio(producto, tamano) {
-  return PRECIOS[producto]?.[tamano]
-    ? `$${PRECIOS[producto][tamano]} MXN`
-    : "$1,200 MXN";
+  const precio = CATALOGO.precios[producto]?.[tamano];
+  return precio ? `$${precio} MXN` : "$900 MXN";
 }
 
 function generarID() {
   return "TXM-" + Date.now().toString().slice(-6);
+}
+
+function catalogoComoTexto() {
+  return CATALOGO.productos.map(p => {
+    const precios = CATALOGO.tamanos
+      .map(t => `${t}: $${CATALOGO.precios[p][t]} MXN`)
+      .join(", ");
+    return `• ${p} (${CATALOGO.descripciones[p]}) — ${precios}`;
+  }).join("\n");
 }
 
 // ─── GOOGLE SHEETS ────────────────────────────────────────────────────────────
@@ -46,38 +124,52 @@ async function registrarEnSheets(datos) {
       Precio:   datos.precio,
       Fecha:    new Date().toLocaleString("es-MX"),
     });
-    console.log("✅ Pedido registrado en Sheets:", datos.id);
+    console.log("✅ Pedido registrado:", datos.id);
   } catch (err) {
-    console.error("❌ Error en Sheets:", err.message);
+    console.error("❌ Error Sheets:", err.message);
   }
 }
 
-// ─── IA CON POLLINATIONS (sin API key, gratis) ────────────────────────────────
-async function generarRespuestaIA(userQuery, tipo, contexto = {}) {
-  const prompts = {
-    interrupcion: `Eres un asistente de ventas amable de Transmex, una tienda de equipaje.
-El cliente está en el paso de elegir ${contexto.paso}.
-El cliente escribió algo fuera del tema: "${userQuery}"
-Responde brevemente (máx 2 oraciones), con amabilidad, y redirige la conversación
-pidiéndole que elija su ${contexto.siguienteDato}.
-No uses markdown. Responde en español.`,
+// ─── IA CON CONCIENCIA DEL INTENT Y CATÁLOGO COMPLETO ────────────────────────
+async function generarRespuestaIA(userQuery, intentName, datosCliente = {}) {
+  const ctx = CONTEXTO_POR_INTENT[intentName]
+    || CONTEXTO_POR_INTENT["Default Fallback Intent"];
 
-    despedida: `Eres un asistente de ventas amable de Transmex.
-El cliente se llama ${contexto.nombre}.
-${userQuery ? `El cliente escribió: "${userQuery}"` : ""}
-Genera una despedida cálida y breve (máx 2 oraciones). 
-No uses markdown. Responde en español.`,
+  const opcionesTexto = ctx.opciones
+    ? `Las opciones válidas para este paso son EXACTAMENTE estas: ${ctx.opciones.join(", ")}. No ofrezcas ninguna otra.`
+    : "";
 
-    fallback: `Eres un asistente de ventas de Transmex.
-El cliente escribió: "${userQuery}"
-No entendiste su mensaje. Pide amablemente que se explique mejor (máx 1 oración).
-No uses markdown. Responde en español.`,
-  };
+  const carritoTexto = [
+    datosCliente.producto && `producto elegido: ${datosCliente.producto}`,
+    datosCliente.tamano   && `tamaño elegido: ${datosCliente.tamano}`,
+    datosCliente.color    && `color elegido: ${datosCliente.color}`,
+  ].filter(Boolean).join(", ");
 
-  const systemPrompt = prompts[tipo] || prompts.fallback;
+  const systemPrompt = `Eres "Traxi", asistente virtual de Transmex, tienda de equipaje de viaje.
+Personalidad: amable, entusiasta, concisa. Sin markdown ni asteriscos. Solo español. Máx 3 oraciones.
+
+CATÁLOGO COMPLETO (lo único que vendes):
+${catalogoComoTexto()}
+Colores disponibles para todos los productos: ${CATALOGO.colores.join(", ")}.
+
+SITUACIÓN DEL CLIENTE AHORA MISMO:
+- Nombre: ${datosCliente.usuario || "Cliente"}
+- Paso actual: ${ctx.paso}
+- Contexto: ${ctx.descripcion}
+- Carrito actual: ${carritoTexto || "vacío, aún no ha elegido nada"}
+
+LO QUE DEBES HACER EN ESTE MENSAJE:
+${ctx.instruccion}
+${opcionesTexto}
+
+REGLAS OBLIGATORIAS:
+1. NUNCA inventes productos, tamaños, colores ni precios fuera del catálogo.
+2. Si piden algo que no está en el catálogo, diles que no está disponible y redirige a las opciones reales.
+3. Si el cliente se desvía del tema, respóndele en máx 1 oración y regresa al paso actual.
+4. Siempre menciona opciones concretas del catálogo cuando el paso lo requiera.
+5. Si ya tiene algo en el carrito, úsalo para personalizar la respuesta.`;
 
   try {
-    // Opción 1: Pollinations AI (gratis, sin key)
     const response = await axios.post(
       "https://text.pollinations.ai/openai",
       {
@@ -86,28 +178,32 @@ No uses markdown. Responde en español.`,
           { role: "system", content: systemPrompt },
           { role: "user",   content: userQuery || "hola" },
         ],
-        max_tokens: 120,
-        temperature: 0.7,
+        max_tokens: 160,
+        temperature: 0.65,
       },
-      {
-        headers: { "Content-Type": "application/json" },
-        timeout: 8000,
-      }
+      { headers: { "Content-Type": "application/json" }, timeout: 9000 }
     );
 
     const texto = response.data?.choices?.[0]?.message?.content?.trim();
-    if (texto) return texto;
-    throw new Error("Respuesta vacía de Pollinations");
+    if (texto) {
+      console.log(`🤖 [${ctx.paso}] → ${texto}`);
+      return texto;
+    }
+    throw new Error("Respuesta vacía");
 
   } catch (err) {
-    console.error("⚠️ Error IA:", err.message);
-    // Fallbacks por tipo si la IA falla
-    const fallbacks = {
-      interrupcion: `Entiendo, ${contexto.nombre || ""}. 😊 Sigamos con tu pedido, ¿me dices tu ${contexto.siguienteDato || "elección"}?`,
-      despedida:    `¡Gracias por preferirnos, ${contexto.nombre || ""}! Fue un placer atenderte. 👋`,
-      fallback:     "No entendí bien, ¿podrías repetirlo de otra forma? 😊",
+    console.error("⚠️ IA falló:", err.message);
+    // Fallbacks inteligentes por paso
+    const fb = {
+      "bienvenida":              `¡Bienvenido a Transmex! Soy Traxi. ¿Me dices tu nombre para atenderte mejor?`,
+      "identificación":          `¡Hola, ${datosCliente.usuario}! Tenemos Maletas, Mochilas y Bolsos. ¿Qué te interesa?`,
+      "selección de producto":   `Contamos con: Maleta ($800-$1600), Mochila ($400-$900) y Bolso ($350-$750). ¿Cuál prefieres?`,
+      "asesoría de producto":    `Tenemos Maletas para viaje, Mochilas para diario y Bolsos urbanos. ¿Para qué lo usarías?`,
+      "confirmación de producto":`¡Excelente elección! Los tamaños son: Pequeño, Mediano y Grande. ¿Cuál prefieres?`,
+      "selección de tamaño":     `Tamaños disponibles: Pequeño, Mediano y Grande. ¿Cuál te va mejor?`,
+      "selección de color":      `Colores disponibles: Negro, Azul, Rojo, Gris, Café y Verde. ¿Cuál eliges?`,
     };
-    return fallbacks[tipo] || fallbacks.fallback;
+    return fb[ctx.paso] || `No entendí bien. ¿Puedes repetirlo? Estamos eligiendo tu ${ctx.paso}.`;
   }
 }
 
@@ -119,9 +215,8 @@ app.post("/webhook", async (req, res) => {
   const userQuery   = queryResult.queryText || "";
   const session     = body.session || "projects/default/agent/sessions/default";
 
-  console.log(`📩 Intent: "${intentName}" | Query: "${userQuery}"`);
+  console.log(`\n📩 Intent: "${intentName}" | Query: "${userQuery}"`);
 
-  // Helper para extraer parámetros de Dialogflow (contextos incluidos)
   const getDato = (nombre) => {
     let v = queryResult.parameters?.[nombre];
     if (!v && queryResult.outputContexts) {
@@ -134,39 +229,53 @@ app.post("/webhook", async (req, res) => {
   };
 
   try {
-    const usuario       = getDato("usuario") || "Cliente";
+    const usuario        = getDato("usuario") || "Cliente";
+    const producto       = getDato("producto");
+    const tamano         = getDato("tamano");
+    const color          = getDato("color");
     const estaEnEncuesta = queryResult.outputContexts?.some(c =>
       c.name.includes("esperandocalificacion")
     );
+    const datosCliente   = { usuario, producto, tamano, color };
 
-    // ── REINICIO TOTAL ────────────────────────────────────────────────────────
+    // ── REINICIO ──────────────────────────────────────────────────────────────
     if (intentName === "9 PasoNuevoPedido" || userQuery.toLowerCase() === "reiniciar") {
-      const borrar = ["bienvenida","iniciocompra","pasodoscompra","pasotamano",
-                      "pasocolor","pasofinal","pasoencuesta","esperandocalificacion"];
+      const ctxs = ["bienvenida","iniciocompra","pasodoscompra","pasotamano",
+                    "pasocolor","pasofinal","pasoencuesta","esperandocalificacion"];
       return res.json({
-        fulfillmentText: "🧹 Memoria limpia. Escribe 'Hola' para empezar de nuevo.",
-        outputContexts: borrar.map(c => ({
-          name: `${session}/contexts/${c}`, lifespanCount: 0,
-        })),
+        fulfillmentText: "🧹 ¡Empecemos de cero! Escribe 'Hola' cuando quieras. 😊",
+        outputContexts: ctxs.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 })),
       });
     }
 
-    // ── PASO 6.1: CONFIRMAR PEDIDO Y REGISTRAR ────────────────────────────────
+    // ── INTENTS QUE USAN IA CON CONTEXTO ─────────────────────────────────────
+    const intentsCon_IA = [
+      "0 Bienvenida", "1 IdentificarUsuario",
+      "2.1 CompraEquipaje", "2.2 AyudaEquipaje",
+      "3.1 CompraProducto", "3.2 InformacionAyuda",
+      "4 SeleccionTamano", "5 SeleccionColor",
+      "Default Fallback Intent",
+    ];
+
+    if (intentsCon_IA.includes(intentName)) {
+      const respuesta = await generarRespuestaIA(userQuery, intentName, datosCliente);
+      return res.json({ fulfillmentText: respuesta });
+    }
+
+    // ── 6.1: REGISTRAR PEDIDO ─────────────────────────────────────────────────
     if (intentName === "6.1 PasoFinalSi") {
       const id     = generarID();
-      const prod   = getDato("producto") || "Maleta";
-      const tam    = getDato("tamano")   || "Mediana";
-      const color  = getDato("color")    || "Negro";
+      const prod   = producto || "Maleta";
+      const tam    = tamano   || "Mediano";
+      const col    = color    || "Negro";
       const precio = calcularPrecio(prod, tam);
 
-      await registrarEnSheets({ id, usuario, producto: prod, tamano: tam, color, precio });
+      await registrarEnSheets({ id, usuario, producto: prod, tamano: tam, color: col, precio });
 
-      const resumen = `¡Listo, ${usuario}! 🎉 Pedido registrado.\n🆔 ID: ${id}\n🎒 ${prod} – ${tam} – ${color}\n💰 ${precio}\n\n¿Te gustaría responder una encuesta de satisfacción?`;
+      const resumen = `¡Perfecto, ${usuario}! 🎉 Tu pedido está confirmado.\n\n🆔 ID: ${id}\n🎒 ${prod} ${tam} – ${col}\n💰 ${precio}\n\n¿Te gustaría responder una encuesta de satisfacción?`;
 
-      const limpiarCompra = ["iniciocompra","pasodoscompra","pasotamano","pasocolor","pasofinal"];
-      const outCtxs = limpiarCompra.map(c => ({
-        name: `${session}/contexts/${c}`, lifespanCount: 0,
-      }));
+      const limpiar = ["iniciocompra","pasodoscompra","pasotamano","pasocolor","pasofinal"];
+      const outCtxs = limpiar.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }));
       outCtxs.push({ name: `${session}/contexts/pasoencuesta`, lifespanCount: 1 });
 
       return res.json({
@@ -179,10 +288,10 @@ app.post("/webhook", async (req, res) => {
                   type: "template",
                   payload: {
                     template_type: "button",
-                    text: "Selecciona:",
+                    text: "¿Quieres responder la encuesta?",
                     buttons: [
                       { type: "postback", title: "Sí", payload: "Si" },
-                      { type: "postback", title: "No", payload: "No" },
+                      { type: "postback", title: "No, gracias", payload: "No" },
                     ],
                   },
                 },
@@ -194,10 +303,10 @@ app.post("/webhook", async (req, res) => {
       });
     }
 
-    // ── PASO 7.1: INICIAR ENCUESTA ────────────────────────────────────────────
+    // ── 7.1: ENCUESTA ─────────────────────────────────────────────────────────
     if (intentName === "7.1 PasoEncuestaSi") {
       return res.json({
-        fulfillmentText: `¡Genial, ${usuario}! ⭐ ¿Cómo calificarías tu experiencia? (Mala / Regular / Buena / Excelente)`,
+        fulfillmentText: `¡Gracias, ${usuario}! ⭐ ¿Cómo calificarías tu experiencia?\n(Mala / Regular / Buena / Excelente)`,
         outputContexts: [
           { name: `${session}/contexts/pasoencuesta`,          lifespanCount: 0 },
           { name: `${session}/contexts/esperandocalificacion`, lifespanCount: 1 },
@@ -205,43 +314,34 @@ app.post("/webhook", async (req, res) => {
       });
     }
 
-    // ── PASO 8 / 7.2: DESPEDIDA ───────────────────────────────────────────────
+    // ── 8 / 7.2: DESPEDIDA ────────────────────────────────────────────────────
     if (
       intentName === "8 PasoDespedida" ||
       intentName === "7.2 PasoEncuestaNo" ||
       (intentName.includes("Fallback") && estaEnEncuesta)
     ) {
-      const despedida = await generarRespuestaIA(userQuery, "despedida", { nombre: usuario });
-      const borrarTodo = ["bienvenida","iniciocompra","pasodoscompra","pasotamano",
-                          "pasocolor","pasofinal","pasoencuesta","esperandocalificacion"];
+      const ctxs = ["bienvenida","iniciocompra","pasodoscompra","pasotamano",
+                    "pasocolor","pasofinal","pasoencuesta","esperandocalificacion"];
       return res.json({
-        fulfillmentText: despedida,
-        outputContexts: borrarTodo.map(c => ({
-          name: `${session}/contexts/${c}`, lifespanCount: 0,
-        })),
+        fulfillmentText: `¡Gracias por elegirnos, ${usuario}! 👋 Fue un placer atenderte. ¡Hasta pronto!`,
+        outputContexts: ctxs.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 })),
       });
     }
 
-    // ── IA PARA INTERRUPCIONES (cualquier otro intent / fallback) ─────────────
-    let pActual = "el producto", sDato = "producto";
-    if (getDato("producto")) { pActual = "el tamaño";  sDato = "tamaño"; }
-    if (getDato("tamano"))   { pActual = "el color";   sDato = "color";  }
-    if (getDato("color"))    { pActual = "la confirmación"; sDato = "confirmación"; }
-
-    const respuestaIA = await generarRespuestaIA(userQuery, "interrupcion", {
-      paso: pActual, siguienteDato: sDato, nombre: usuario,
-    });
-
-    return res.json({ fulfillmentText: respuestaIA });
+    // ── FALLBACK GENÉRICO ─────────────────────────────────────────────────────
+    const fb = await generarRespuestaIA(userQuery, "Default Fallback Intent", datosCliente);
+    return res.json({ fulfillmentText: fb });
 
   } catch (err) {
     console.error("❌ Error general:", err.message);
-    return res.json({ fulfillmentText: "Ups, algo salió mal. ¿Podrías repetir eso? 😊" });
+    return res.json({
+      fulfillmentText: `Ups, algo falló. 😅 Recuerda que tenemos ${CATALOGO.productos.join(", ")}. ¿Te interesa alguno?`,
+    });
   }
 });
 
 // ─── HEALTH CHECK ─────────────────────────────────────────────────────────────
-app.get("/", (req, res) => res.send("🤖 Bot Transmex activo"));
+app.get("/", (req, res) => res.send("🤖 Traxi v2 – Bot Transmex activo"));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Servidor corriendo en puerto ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Traxi v2 corriendo en puerto ${PORT}`));
