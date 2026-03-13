@@ -30,7 +30,7 @@ function generarID() {
 }
 
 // ==============================
-// GOOGLE SHEETS (CONEXIÓN)
+// GOOGLE SHEETS (CONEXIÓN MEJORADA)
 // ==============================
 const serviceAccountAuth = new JWT({
     email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
@@ -47,33 +47,35 @@ async function registrarEnSheets(data) {
             await doc.loadInfo();
             sheetCache = doc.sheetsByIndex[0];
         }
+        // Aseguramos que los nombres de las columnas coincidan con tu Excel
         await sheetCache.addRow({
             ID_Pedido: data.id,
-            Fecha: new Date().toLocaleString(),
+            Fecha: new Date().toLocaleString("es-MX", { timeZone: "America/Mexico_City" }),
             Usuario: data.usuario,
             Producto: data.producto,
             Tamaño: data.tamano,
-            Color: data.color,
+            Color: data.color || "No especificado",
             Precio: data.precio,
             Estado: "Pendiente"
         });
+        console.log("✅ Registro exitoso en Sheets");
     } catch (e) {
-        console.error("❌ Error en Sheets:", e.message);
+        console.error("❌ Error crítico en Sheets:", e.message);
     }
 }
 
 // ==============================
-// IA POLLINATIONS (SISTEMA CENTRAL)
+// IA POLLINATIONS
 // ==============================
 async function generarRespuestaIA(query, modo, info = {}, intentos = 2) {
     const { nombre = "James", paso = "inicio", siguiente = "producto" } = info;
 
     const prompts = {
-        reinicio: `El cliente ${nombre} quiere reiniciar. Confirma amablemente y pregunta si busca mochila, maleta o bolso.`,
-        despedida: `El cliente ${nombre} terminó. Despídete con humor y dile que escriba 'Hola' para volver.`,
-        error: `El cliente dijo "${query}". Como vendedor experto, responde brevemente y redirígelo a elegir el ${siguiente}.`,
-        encuesta: `El pedido de ${nombre} está listo. Invítalo con una sola frase muy entusiasta a responder una breve encuesta de satisfacción.`,
-        flujo: `Eres vendedor de equipaje. El cliente dice "${query}". Ayúdalo y pregúntale por el ${siguiente}.`
+        reinicio: `El cliente ${nombre} ha reiniciado la conversación. Salúdalo brevemente y pregúntale qué accesorio de viaje busca hoy (mochila, maleta o bolso).`,
+        despedida: `El cliente ${nombre} se va. Despídete con amabilidad y humor.`,
+        error: `El cliente dijo "${query}". Como vendedor, responde con ingenio y vuelve a preguntar por el ${siguiente}.`,
+        encuesta: `Venta terminada para ${nombre}. Invítalo con una frase corta y entusiasta a calificar el servicio.`,
+        flujo: `Eres vendedor. El cliente dice "${query}". Ayúdalo y pregúntale por el ${siguiente}.`
     };
 
     const systemPrompt = prompts[modo] || prompts.flujo;
@@ -91,74 +93,87 @@ async function generarRespuestaIA(query, modo, info = {}, intentos = 2) {
             const texto = typeof r.data === 'string' ? r.data : r.data.choices[0].message.content;
             return texto.trim();
         } catch (e) {
-            if (i === intentos - 1) return "¿Deseas responder una encuesta de satisfacción?";
+            if (i === intentos - 1) return "¿Te gustaría realizar un nuevo pedido?";
             await new Promise(res => setTimeout(res, 1000));
         }
     }
 }
 
 // ==============================
-// WEBHOOK (LÓGICA DE DIALOGFLOW)
+// WEBHOOK (LÓGICA MEJORADA)
 // ==============================
 app.post("/webhook", async (req, res) => {
     try {
-        const { queryResult } = req.body;
+        const { queryResult, session } = req.body;
         const intentName = queryResult?.intent?.displayName || "Fallback";
         const userQuery = queryResult?.queryText || "";
 
         const getP = (n) => queryResult.parameters?.[n] || null;
-        const usuario = getP("usuario") || "James";
+        const usuario = getP("usuario") || "Cliente";
         const producto = getP("producto");
         const tamano = getP("tamano");
         const color = getP("color");
 
-        let paso = "inicio";
-        let siguiente = "producto";
-        if (producto) { paso = "tamaño"; siguiente = "tamaño"; }
-        if (tamano) { paso = "color"; siguiente = "color"; }
-        if (color) { paso = "confirmación"; siguiente = "confirmación"; }
-
-        // 1. REINICIO
+        // 1. LÓGICA DE REINICIO (LIMPIEZA TOTAL DE CONTEXTOS)
         if (userQuery.toLowerCase().includes("reinicio") || intentName.includes("reinicio")) {
             const r = await generarRespuestaIA(userQuery, "reinicio", { nombre: usuario });
-            return res.json({ fulfillmentText: r, outputContexts: [] });
+            
+            // Para limpiar contextos, enviamos los existentes con lifespan 0
+            const activeContexts = queryResult.outputContexts || [];
+            const expiredContexts = activeContexts.map(ctx => ({
+                name: ctx.name,
+                lifespanCount: 0
+            }));
+
+            return res.json({
+                fulfillmentText: r,
+                fulfillmentMessages: [
+                    { text: { text: [r] } },
+                    {
+                        quickReplies: {
+                            title: "Elige una opción:",
+                            quickReplies: ["Hacer otro pedido", "Ayuda"]
+                        }
+                    }
+                ],
+                outputContexts: expiredContexts
+            });
         }
 
-        // 2. REGISTRO FINAL (CON FORMATO DE PRECIO ANTERIOR)
+        // 2. REGISTRO FINAL
         if (intentName.includes("PasoFinalSi")) {
             const id = generarID();
             const prod = normalizar(producto || "Mochila");
             const tam = normalizar(tamano || "Mediana");
+            const col = normalizar(color || "Gris");
             const precio = calcularPrecio(prod, tam);
 
-            await registrarEnSheets({ id, usuario, producto: prod, tamano: tam, color: color || "Gris", precio });
+            // Guardar con todos los datos capturados
+            await registrarEnSheets({ id, usuario, producto: prod, tamano: tam, color: col, precio });
 
             const mensajeIA = await generarRespuestaIA(userQuery, "encuesta", { nombre: usuario });
 
-            // Formato exacto solicitado
             return res.json({
                 fulfillmentText: `🎉 Pedido registrado\n\nID: ${id}\nProducto: ${prod}\nTamaño: ${tam}\nPrecio: ${precio}\n\n${mensajeIA}`
             });
         }
 
-        // 3. DESPEDIDAS
-        if (intentName.includes("Despedida") || intentName.includes("EncuestaNo")) {
-            const r = await generarRespuestaIA(userQuery, "despedida", { nombre: usuario });
-            return res.json({ fulfillmentText: r });
-        }
-
-        // 4. IA GENERAL / FALLBACK
+        // 3. FALLBACKS O CONSULTAS RANDOM
+        const paso = producto ? (tamano ? "color" : "tamaño") : "producto";
+        const siguiente = producto ? (tamano ? "color" : "tamaño") : "producto";
+        
         const modoIA = (intentName.includes("Fallback")) ? "error" : "flujo";
         const respuestaIA = await generarRespuestaIA(userQuery, modoIA, {
             nombre: usuario,
-            paso: paso,
-            siguiente: siguiente
+            paso,
+            siguiente
         });
 
         res.json({ fulfillmentText: respuestaIA });
 
     } catch (e) {
-        res.json({ fulfillmentText: "¡Excelente elección! ¿Confirmamos tu pedido?" });
+        console.error("Error en Webhook:", e);
+        res.json({ fulfillmentText: "Lo siento, ¿podemos retomar tu pedido de mochila o maleta?" });
     }
 });
 
