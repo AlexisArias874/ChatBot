@@ -44,9 +44,10 @@ async function registrarEnSheets(d) {
 async function generarRespuestaIA(query, modo, info = {}) {
     let systemPrompt = "";
     if (modo === "despedida") {
-        systemPrompt = `Eres un vendedor amable. El cliente ${info.nombre} terminó. Agradece, cuenta un chiste corto de maletas y dile que escriba 'Hola' para volver.`;
+        systemPrompt = `Eres un vendedor de maletas carismático. El cliente ${info.nombre} acaba de calificar el servicio. 
+        INSTRUCCIONES: 1. Agradece brevemente. 2. Cuenta un chiste corto de maletas o viajes. 3. Dile que escriba 'Hola' para un nuevo pedido. 4. Despídete con muchos emojis.`;
     } else {
-        systemPrompt = `Vendedor experto. El usuario preguntó: "${query}". Responde con humor, cuenta un chiste de viajes y regrésalo al paso de ${info.paso} pidiendo su ${info.siguienteDato}.`;
+        systemPrompt = `Vendedor experto. El usuario preguntó: "${query}". Responde brevemente con humor, cuenta un chiste de viajes y regrésalo al paso de ${info.paso} pidiendo su ${info.siguienteDato}.`;
     }
 
     try {
@@ -59,7 +60,7 @@ async function generarRespuestaIA(query, modo, info = {}) {
         });
         return response.data.choices[0].message.content;
     } catch (e) {
-        return `¡Vaya, me distraje! 😅 Pero dime, Axel, ¿qué ${info.siguienteDato || 'producto'} prefieres?`;
+        return `¡Gracias por visitarnos, ${info.nombre}! 🙌 Si quieres iniciar un nuevo pedido, solo escribe 'Hola'. ¡Buen viaje! ✈️`;
     }
 }
 
@@ -82,14 +83,13 @@ app.post("/webhook", async (req, res) => {
 
     try {
         const usuario = getDato("usuario") || "Cliente";
-        const enEncuesta = queryResult.outputContexts?.some(c => c.name.includes("pasoencuesta"));
-        const enCalificacion = queryResult.outputContexts?.some(c => c.name.includes("esperandocalificacion"));
+        const enCalificacion = queryResult.outputContexts?.some(c => c.name.toLowerCase().includes("esperandocalificacion"));
 
         // --- REINICIO ---
         if (intentName === "9 PasoNuevoPedido" || userQuery.toLowerCase() === "reiniciar") {
             const borrar = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "esperandocalificacion"];
             return res.json({
-                fulfillmentText: "🧹 ¡Todo limpio! Escribe 'Hola' para comenzar de nuevo.",
+                fulfillmentText: "🧹 Memoria limpia. Escribe 'Hola' para empezar de nuevo.",
                 outputContexts: borrar.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }))
             });
         }
@@ -103,41 +103,44 @@ app.post("/webhook", async (req, res) => {
             const precio = calcularPrecio(prod, tam);
             await registrarEnSheets({ id, usuario, producto: prod, tamano: tam, color: col, precio });
 
-            const resumen = `¡Listo, ${usuario}! 🎉 Pedido ID: ${id}\n🎒: ${prod}\n📏: ${tam}\n💰: ${precio}\n\n¿Deseas responder una encuesta?`;
+            const resumen = `¡Listo, ${usuario}! 🎉 Pedido registrado ID: ${id}\n🎒: ${prod}\n📏: ${tam}\n💰: ${precio}\n\n¿Deseas responder una encuesta?`;
             
-            // BORRAMOS VENTA, ACTIVAMOS ENCUESTA
-            const ctxsVenta = ["iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal"];
-            const out = ctxsVenta.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }));
-            out.push({ name: `${session}/contexts/pasoencuesta`, lifespanCount: 1 });
+            const borrarVenta = ["iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal"];
+            const outCtxs = borrarVenta.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }));
+            outCtxs.push({ name: `${session}/contexts/pasoencuesta`, lifespanCount: 1 });
 
             return res.json({
                 fulfillmentMessages: [{ "text": { "text": [resumen] } }, { "payload": { "facebook": { "attachment": { "type": "template", "payload": { "template_type": "button", "text": "Selecciona:", "buttons": [{ "type": "postback", "title": "Sí", "payload": "Si" }, { "type": "postback", "title": "No", "payload": "No" }] } } } } }],
-                outputContexts: out
+                outputContexts: outCtxs
             });
         }
 
-        // --- 7.1 ACEPTAR ENCUESTA ---
-        if (intentName === "7.1 PasoEncuestaSi" || (enEncuesta && userQuery.toLowerCase().includes("si"))) {
+        // --- 7.1 PREGUNTA ENCUESTA ---
+        if (intentName === "7.1 PasoEncuestaSi") {
             return res.json({ 
-                fulfillmentText: `¡Genial! ⭐ ¿Cómo calificarías tu experiencia? (Mala, Regular, Buena, Excelente)`,
+                fulfillmentText: `¡Genial, ${usuario}! ⭐ ¿Cómo calificarías tu experiencia? (Mala, Regular, Buena, Excelente)`,
                 outputContexts: [{ name: `${session}/contexts/pasoencuesta`, lifespanCount: 0 }, { name: `${session}/contexts/esperandocalificacion`, lifespanCount: 1 }]
             });
         }
 
-        // --- 8 / 7.2 DESPEDIDA (CHISTE E IA) ---
-        if (intentName === "8 PasoDespedida" || intentName === "7.2 PasoEncuestaNo" || (intentName.includes("Fallback") && enCalificacion)) {
+        // --- 8 / 7.2 DESPEDIDA (LA TRAMPA PARA EL BUCLE) ---
+        // Si el intent es despedida O si estamos en la fase de calificación (aunque no entienda la palabra)
+        if (intentName === "8 PasoDespedida" || intentName === "7.2 PasoEncuestaNo" || enCalificacion) {
             const despedida = await generarRespuestaIA(userQuery, "despedida", { nombre: usuario });
             const todos = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "esperandocalificacion"];
-            return res.json({ fulfillmentText: despedida, outputContexts: todos.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 })) });
+            return res.json({
+                fulfillmentText: despedida,
+                outputContexts: todos.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }))
+            });
         }
 
         // --- IA PARA INTERRUPCIONES ---
         let paso = "inicio", sig = "producto";
-        if (getDato("producto")) { paso = "tamaño"; sig = "tamaño"; }
-        if (getDato("tamano")) { paso = "color"; sig = "color"; }
+        if (getDato("producto")) { paso = "el tamaño"; sig = "tamaño"; }
+        if (getDato("tamano")) { paso = "el color"; sig = "color"; }
 
-        const respuesta = await generarRespuestaIA(userQuery, "interrupcion", { paso, siguienteDato: sig, nombre: usuario });
-        return res.json({ fulfillmentText: respuesta });
+        const respuestaIA = await generarRespuestaIA(userQuery, "interrupcion", { paso, siguienteDato: sig, nombre: usuario });
+        return res.json({ fulfillmentText: respuestaIA });
 
     } catch (err) { return res.json({ fulfillmentText: "¡Excelente! ¿Confirmamos el pedido? 🧳" }); }
 });
