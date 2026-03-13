@@ -1,13 +1,17 @@
 async function generarRespuestaIA(query, modo, info = {}) {
 
+    const nombre = info.nombre || "Cliente"
+    const paso = info.paso || "la elección del producto"
+    const siguiente = info.siguienteDato || "opción"
+
     let systemPrompt = ""
 
     if (modo === "despedida") {
         systemPrompt =
-        `Vendedor amable. El cliente ${info.nombre} terminó. Agradece, cuenta un chiste corto de maletas y dile que escriba Hola para volver.`
+        `Vendedor amable. El cliente ${nombre} terminó. Agradece, cuenta un chiste corto de maletas y dile que escriba Hola para volver.`
     } else {
         systemPrompt =
-        `Vendedor experto. Axel preguntó: "${query}". Responde breve con humor, cuenta un chiste y regrésalo a ${info.paso} pidiendo su ${info.siguienteDato}.`
+        `Vendedor experto. El cliente preguntó: "${query}". Responde breve con humor, cuenta un chiste y regresa al flujo de compra en ${paso} pidiendo su ${siguiente}.`
     }
 
     // =====================
@@ -16,7 +20,7 @@ async function generarRespuestaIA(query, modo, info = {}) {
 
     const modelos = ["mistral", "llama", "openai"]
 
-    for (let modelo of modelos) {
+    for (const modelo of modelos) {
 
         for (let intento = 1; intento <= 2; intento++) {
 
@@ -36,17 +40,19 @@ async function generarRespuestaIA(query, modo, info = {}) {
                     { timeout: 12000 }
                 )
 
-                const texto = r?.data?.text
+                const texto = r?.data?.text || r?.data?.response
 
-                if (texto) {
+                if (texto && texto.length > 5) {
 
-                    console.log("✅ Pollinations respondió")
+                    console.log(`✅ Pollinations respondió con ${modelo}`)
 
-                    return texto
+                    return texto.trim()
                 }
 
             } catch (e) {
-                console.log("⚠️ Pollinations fallo")
+
+                console.log(`⚠️ Pollinations fallo (${modelo})`, e.message)
+
             }
 
         }
@@ -57,40 +63,44 @@ async function generarRespuestaIA(query, modo, info = {}) {
     // 2️⃣ OPENROUTER FALLBACK
     // =====================
 
-    try {
+    if (process.env.OPENROUTER_API_KEY) {
 
-        console.log("🔁 Activando fallback OpenRouter")
+        try {
 
-        const r = await axios.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            {
-                model: "meta-llama/llama-3.1-8b-instruct:free",
-                messages: [
-                    { role: "system", content: systemPrompt },
-                    { role: "user", content: query }
-                ]
-            },
-            {
-                headers: {
-                    Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
-                    "Content-Type": "application/json"
+            console.log("🔁 Activando fallback OpenRouter")
+
+            const r = await axios.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                {
+                    model: "meta-llama/llama-3.1-8b-instruct:free",
+                    messages: [
+                        { role: "system", content: systemPrompt },
+                        { role: "user", content: query }
+                    ]
                 },
-                timeout: 15000
+                {
+                    headers: {
+                        Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+                        "Content-Type": "application/json"
+                    },
+                    timeout: 15000
+                }
+            )
+
+            const texto = r?.data?.choices?.[0]?.message?.content
+
+            if (texto && texto.length > 5) {
+
+                console.log("✅ OpenRouter respondió")
+
+                return texto.trim()
             }
-        )
 
-        const texto = r?.data?.choices?.[0]?.message?.content
+        } catch (e) {
 
-        if (texto) {
+            console.log("❌ OpenRouter fallo:", e.message)
 
-            console.log("✅ OpenRouter respondió")
-
-            return texto
         }
-
-    } catch (e) {
-
-        console.log("❌ OpenRouter fallo")
 
     }
 
@@ -98,7 +108,7 @@ async function generarRespuestaIA(query, modo, info = {}) {
     // 3️⃣ RESPUESTA LOCAL
     // =====================
 
-    console.log("🤖 fallback local")
+    console.log("🤖 fallback local activado")
 
     const chistes = [
         "¿Sabías que las maletas nunca discuten? Porque siempre llevan la carga.",
@@ -108,13 +118,13 @@ async function generarRespuestaIA(query, modo, info = {}) {
 
     const chiste = chistes[Math.floor(Math.random() * chistes.length)]
 
-    return `¡${info.nombre}! 😂
+    return `¡${nombre}! 😂
 
 ${chiste}
 
 Pero volvamos a lo importante.
 
-Estábamos en ${info.paso}.
+Estábamos en ${paso}.
 
-¿Qué ${info.siguienteDato} prefieres?`
+¿Qué ${siguiente} prefieres?`
 }
