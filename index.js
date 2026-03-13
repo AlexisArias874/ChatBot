@@ -75,7 +75,7 @@ async function generarRespuestaIA(query, modo, info = {}) {
         return resp.data;
     } catch (e) { 
         console.error("⚠️ Timeout IA, usando respuesta fallback.");
-        return `¡Gracias por tu preferencia, ${info.nombre}! 🙌 ¿Deseas algo más? Escribe 'Hola' para un nuevo pedido.`; 
+        return `¡Gracias por tu preferencia! 🙌 ¿Deseas algo más? Escribe 'Hola' para un nuevo pedido.`; 
     }
 }
 
@@ -104,7 +104,7 @@ app.post("/webhook", async (req, res) => {
         if (intentName === "9 PasoNuevoPedido" || userQuery.toLowerCase() === "reiniciar") {
             const borrar = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "esperandocalificacion"];
             return res.json({
-                fulfillmentText: "🧹 Memoria limpia. Escribe 'Hola' para empezar de nuevo.",
+                fulfillmentText: "🧹 Si deseas hacer otro pedido scribe 'Hola'.",
                 outputContexts: borrar.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 }))
             });
         }
@@ -167,3 +167,4 @@ app.post("/webhook", async (req, res) => {
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`🚀 Puerto: ${PORT}`));
+
