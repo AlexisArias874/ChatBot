@@ -86,7 +86,7 @@ app.post("/webhook", async (req, res) => {
         // A) REINICIO TOTAL
         if (intentName.includes("9") || userQuery.toLowerCase() === "reiniciar") {
             const borrarTodo = ["bienvenida", "iniciocompra", "pasodoscompra", "pasotamano", "pasocolor", "pasofinal", "pasoencuesta", "esperandocalificacion", "PasoFinal", "InicioCompra", "PasoTamano", "PasoDosCompra"];
-            return res.json({ fulfillmentText: "🧹 ¡Borrón y cuenta nueva! Escribe 'Hola' para empezar.", outputContexts: borrarTodo.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 })) });
+            return res.json({ fulfillmentText: "Escribe 'Hola' para empezar.", outputContexts: borrarTodo.map(c => ({ name: `${session}/contexts/${c}`, lifespanCount: 0 })) });
         }
 
         // B) PASO 6.1: REGISTRO FINAL (LA CLAVE ESTÁ AQUÍ)
@@ -138,3 +138,4 @@ app.post("/webhook", async (req, res) => {
 });
 
 app.listen(process.env.PORT || 10000);
+
